@@ -21,20 +21,35 @@ class OzonProduct(db.Model):
     
     id = db.Column(db.Text, primary_key=True, doc='系统生成id')
     # ozon订单信息赋值
-    offer_id = db.Column(db.Text, unique=True, doc='产品货号')
-    name = db.Column(db.Text, unique=True, doc='产品名称')
+    offer_id = db.Column(db.Text, doc='产品货号')
+    name = db.Column(db.Text, doc='产品名称')
     price = db.Column(db.Text, doc='产品价格')
 
     currency_code = db.Column(db.Text, doc='产品价格货币')
-    sku = db.Column(db.Text, doc='产品Sku')
+    sku = db.Column(db.Text, index=True, doc='产品Sku')
     link = db.Column(db.Text, doc='产品链接')
     mandatory_mark = db.Column(db.Text, doc='产品属性标签')
     primary_image = db.Column(db.Text, doc='产品主图')
     product_id = db.Column(db.Text, doc='ozon中产品id')
 
+    fbo_commission_percent = db.Column(db.Text, doc='fbo佣金百分比')
+    fbo_commission_value = db.Column(db.Text, doc='fbo佣金金额')
+    fbs_commission_percent = db.Column(db.Text, doc='fbs佣金百分比')
+    fbs_commission_value = db.Column(db.Text, doc='fbs佣金金额')
+    rfbs_commission_percent = db.Column(db.Text, doc='rfbs佣金百分比')
+    rfbs_commission_value = db.Column(db.Text, doc='rfbs佣金金额')
+    fbp_commission_percent = db.Column(db.Text, doc='fbp佣金百分比')
+    fbp_commission_value = db.Column(db.Text, doc='fbp佣金金额')
+
+    category_two_id = db.Column(db.Text, doc='二级目录类别')
+    category_three_id = db.Column(db.Text, doc='三级目录类别')
+
+
+    # 关联商店
+    shop_id = db.Column(db.Text, db.ForeignKey('shop.id'))
+
     # 关联ozon订单
     ozon_orders_msg = db.relationship('OzonOrderOzonProduct', backref='ozon_product')
-
     # 关联系统中创建的商品
     system_products = db.relationship('SystemProduct', secondary=ozon_product_system_product, backref='ozon_products')
 

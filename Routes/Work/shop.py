@@ -12,45 +12,100 @@ from sqlalchemy import or_
 
 
 from Utils.crud import getDataFromDataBase_BaseData,addDataFromDataBase,modifyDataFromDataBase,deleteDataFromDataBase
+from Utils.apiRightsDecorator import admin_required,operations_required
+from Utils.logWriter import operate_log_writer_func,operate_log_writer_dec
+from Utils.Constant.operateType import OperateType
 
+from Models.User.user_model import User
 from Models.Work.shop_model import Shop 
 
 
-work_shop_list = Blueprint('Work_shop', __name__, url_prefix='Work/shop')
+shop_list = Blueprint('shop', __name__, url_prefix='/shop')
 
-# 无登陆都可以查到总数据  # 登陆后 都可以看到详情页
-# 只有登陆后有某个领域权限的专家 才能新增该领域菜单下的工艺卡片（其他库只有管理员能新增）
+# 店铺数据初始化
+@shop_list.route('/initData', methods=['POST'])
+def initAdminAccount():
+
+    shop_data = [
+        {
+            "name":"店铺一号",
+            "api_id": "221854",
+            "api_key":"48d6d7e7-7842-4f21-a5a2-896dea7cd734"
+        },
+        {
+            "name":"店铺二号",
+            "api_id": "767055",
+            "api_key":"02c837e4-abfa-4779-ba7b-0cd06a22c058"
+        }
+    ]
+    add_shop_list = []
+
+    for i in shop_data:
+        shop= Shop()
+        shop.id = str(uuid.uuid1())
+        shop.name = i["name"]
+        shop.api_id = i["api_id"]
+        shop.api_key = i["api_key"]
+        add_shop_list.append(shop)
+    try:
+        db.session.add_all(add_shop_list)
+        db.session.commit()
+        return jsonify({"msg": "店铺数据初始化成功！"}), 200
+    except Exception as e:
+        return jsonify({"msg": "已完成初始化，请勿重复操作！"}), 400
+
 
 # 查询数据
-@work_shop_list.route('/getData', methods=['GET'])
+@shop_list.route('/getData', methods=['GET'])
 @jwt_required()
+@operations_required
 def getData():
 
-    # 可填写字段 start(从第几个数据开始，默认0) 
-    # limit(取多少条，默认10) 
-    # keyWord(模糊查询关键字 可以不传)
-    return getDataFromDataBase_BaseData(Shop)
+    start = int(request.args.get('start', 0))
+    limit = int(request.args.get('limit', 10))
+    keyWord = str(request.args.get('keyWord', None))
+
+    current_user = get_jwt_identity()
+    user = User.query.filter_by(id=current_user['id']).first()
+
+    if keyWord:
+        columns = [column.name for column in Shop.__table__.columns if column.name != 'id']
+        filters = [getattr(Shop, col).like(f'%{keyWord}%') for col in columns]
+        query = Shop.query.filter(or_(*filters))
+    else:
+        query = Shop.query
+
+    if not user.is_admin:
+        query = query.filter_by(owner_id=current_user['id'])
+
+    results = query.order_by(Shop.create_time).offset(start).limit(limit).all()
+    results = [{column.name: getattr(result, column.name) for column in Shop.__table__.columns} for result in results]
+
+    return jsonify({
+        "msg":"查询成功！",
+        "data":results
+    }), 200 
 
 
-# 新增数据
-@work_shop_list.route('/addData', methods=['POST'])
+# 管理员新增数据
+@shop_list.route('/addData', methods=['POST'])
 @jwt_required()
+@admin_required
 def addData():
-    return addDataFromDataBase(Shop) 
+    return addDataFromDataBase(Shop,OperateType.shop) 
 
 
-# 修改数据
-@work_shop_list.route('/modifyData', methods=['POST'])
+# 管理员修改数据
+@shop_list.route('/modifyData', methods=['POST'])
 @jwt_required()
+@admin_required
 def modifyData(): 
-    return modifyDataFromDataBase(Shop)
+    return modifyDataFromDataBase(Shop,OperateType.shop)
 
 
-# 删除数据
-@work_shop_list.route('/deleteData', methods=['POST'])
+# 管理员删除数据
+@shop_list.route('/deleteData', methods=['POST'])
 @jwt_required()
+@admin_required
 def deleteData():
-    return deleteDataFromDataBase(Shop)
-
-
-
+    return deleteDataFromDataBase(Shop,OperateType.shop)

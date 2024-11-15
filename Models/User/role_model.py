@@ -18,7 +18,7 @@ class Role(db.Model):
     __tablename__ = 'role'
 
     id = db.Column(db.Text, primary_key=True, doc='权限ID')
-    name = db.Column(db.Text, unique=True, doc='权限名称')
+    name = db.Column(db.Text, unique=True, index=True, doc='权限名称')
     
     users = db.relationship('User', secondary=user_role, backref='roles')
 

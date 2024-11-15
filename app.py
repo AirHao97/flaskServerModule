@@ -28,7 +28,6 @@ def create_app():
 
     # 配置数据库
     app.config.from_object(config.Config)
-    print()
     # 实例化sqlalchemy对象，传⼊app
     db.init_app(app)
     

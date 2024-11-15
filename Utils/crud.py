@@ -10,10 +10,12 @@ import uuid
 from flask_jwt_extended import get_jwt_identity
 from sqlalchemy import or_
 
+from Utils.logWriter import operate_log_writer_func,operate_log_writer_dec
+from Utils.Constant.operateType import OperateType
 
-# 查询数据
+# 查询全部数据
 def getDataFromDataBase_BaseData(Obj):
-    
+
     start = int(request.args.get('start', 0))
     limit = int(request.args.get('limit', 10))
     keyWord = str(request.args.get('keyWord', None))
@@ -33,9 +35,19 @@ def getDataFromDataBase_BaseData(Obj):
         "data":results
     }), 200 
 
+# 根据Id查询数据
+def getDataFromDataBaseById_BaseData(Obj,id):
+    
+    obj = Obj.query.filter_by(id=id).first()
+    result = {column.name: getattr(obj, column.name) for column in Obj.__table__.columns}
+
+    return jsonify({
+        "msg":"查询成功！",
+        "data":result
+    }), 200 
 
 # 添加数据
-def addDataFromDataBase(Obj):
+def addDataFromDataBase(Obj,ObjType):
 
     current_user = get_jwt_identity()
     data = request.get_json()
@@ -51,6 +63,7 @@ def addDataFromDataBase(Obj):
     try:
         db.session.add_all([obj])
         db.session.commit()
+        operate_log_writer_func(operateType=ObjType,describe=f"操作人:{current_user['username']}, 操作:添加数据, id:{obj.id}")
         return {"msg":"新增成功！"}, 200  
     except Exception as e:
         print(e)
@@ -58,7 +71,9 @@ def addDataFromDataBase(Obj):
 
 
 # 修改数据
-def modifyDataFromDataBase(Obj):
+def modifyDataFromDataBase(Obj,ObjType):
+
+    current_user = get_jwt_identity()
 
     data = request.get_json()
     id = data.get('id')
@@ -69,12 +84,6 @@ def modifyDataFromDataBase(Obj):
     obj = Obj.query.filter_by(id=id).first()
     if obj is None:
         return jsonify({"msg": "未找到对应的对象！"}), 401
-    
-    current_user = get_jwt_identity()
-
-    if not current_user["is_admin"]:
-        if obj.creator.id != current_user["id"]:
-            return jsonify({"msg": "无修改权限！"}), 400
     
     for key, value in data.items():
         if hasattr(obj, key):
@@ -83,13 +92,16 @@ def modifyDataFromDataBase(Obj):
             print(f"属性 {key} 不存在于 对象 模型中。")
     try:
         db.session.commit()
+        operate_log_writer_func(operateType=ObjType,describe=f"操作人:{current_user['username']}, 操作:修改数据, id:{id}")
         return {"msg":"修改成功！"}, 200  
     except Exception as e:
-        return {"msg":"对象名字/对象行业通用标识 字段重复"}, 400 
+        return {"msg":"修改失败！"}, 400 
 
 
 # 删除数据
-def deleteDataFromDataBase(Obj):
+def deleteDataFromDataBase(Obj,ObjType):
+
+    current_user = get_jwt_identity()
 
     data = request.get_json()
     id = data.get('id')
@@ -100,16 +112,11 @@ def deleteDataFromDataBase(Obj):
     obj = Obj.query.filter_by(id=id).first()
     if obj is None:
         return jsonify({"msg": "未找到对应的对象！"}), 401
-    
-    current_user = get_jwt_identity()
 
-    if not current_user["is_admin"]:
-        if obj.creator.id != current_user["id"]:
-            return jsonify({"msg": "无修改权限！"}), 400
-    
     try:
         db.session.delete(obj)
         db.session.commit()
+        operate_log_writer_func(operateType=ObjType,describe=f"操作人:{current_user['username']}, 操作:删除数据, id:{id}")
         return {"msg":"删除成功！"}, 200  
     except Exception as e:
         print(e)

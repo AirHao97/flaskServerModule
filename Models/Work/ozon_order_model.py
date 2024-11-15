@@ -24,9 +24,9 @@ class OzonOrder(db.Model):
     
     id = db.Column(db.Text, primary_key=True, doc='系统生成id')
     # ozon订单信息赋值
-    order_id = db.Column(db.Text, unique=True, doc='ozon中订单id')
-    order_number = db.Column(db.Text, unique=True, doc='订单号')
-    posting_number = db.Column(db.Text, doc='货件号')
+    order_id = db.Column(db.Text, doc='ozon中订单id')
+    order_number = db.Column(db.Text, doc='订单号')
+    posting_number = db.Column(db.Text, unique=True, doc='货件号')
     posting_status = db.Column(db.Text, doc='货运状态')
     logistics_status = db.Column(db.Text, doc='物流状态')
     delivery_id = db.Column(db.Text, doc='快递id')
@@ -40,10 +40,21 @@ class OzonOrder(db.Model):
     customer_id = db.Column(db.Text, doc='买家id')
     customer_name = db.Column(db.Text, doc='买家姓名')
     address_city = db.Column(db.Text, doc='快递城市')
-
+    in_process_at = db.Column(db.Text, doc='开始处理货件的日期和时间')
+    shipment_date = db.Column(db.Text, doc='必须收取货件的日期和时间')
+    delivering_date = db.Column(db.Text, doc='货件交付物流的时间')
+    cancel_reason = db.Column(db.Text, doc='订单取消原因')
+    cancellation_type = db.Column(db.Text, doc='取消类型 客户/ozon/卖家')
+    currency_code = db.Column(db.Text, doc='价格货币')
+    
     # 自定义字段
     total_price = db.Column(db.Text, doc='订单总价')
     system_status = db.Column(db.Text, doc='系统中状态')
+
+    approval_time = db.Column(db.Text, doc='通过运营审核时间')
+    dispatch_time = db.Column(db.Text, doc='出库时间')
+    shipping_time = db.Column(db.Text, doc='发货时间')
+    cancel_time = db.Column(db.Text, doc='作废时间')
 
     # 关联ozon产品
     ozon_products_msg = db.relationship('OzonOrderOzonProduct', backref='ozon_order')
