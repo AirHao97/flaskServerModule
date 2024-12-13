@@ -3,6 +3,7 @@ class OperateType:
     ozonOrder = "ozon订单数据"
     ozonProduct = "ozon产品数据"
     purchaseOrder = "采购数据"
+    purchaseProduct = "采购商品"
     shop = "店铺数据"
     role = "角色数据"
     department = "部门数据"

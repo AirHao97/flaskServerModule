@@ -21,7 +21,7 @@ def getDataFromDataBase_BaseData(Obj):
     keyWord = str(request.args.get('keyWord', None))
 
     if keyWord:
-        columns = [column.name for column in Obj.__table__.columns if column.name != 'id']
+        columns = [column.name for column in Obj.__table__.columns ]
         filters = [getattr(Obj, col).like(f'%{keyWord}%') for col in columns]
         query = Obj.query.filter(or_(*filters))
     else:
@@ -32,7 +32,10 @@ def getDataFromDataBase_BaseData(Obj):
 
     return jsonify({
         "msg":"查询成功！",
-        "data":results
+        "data":{
+            "data":results,
+            "count": query.count()
+        }
     }), 200 
 
 # 根据Id查询数据

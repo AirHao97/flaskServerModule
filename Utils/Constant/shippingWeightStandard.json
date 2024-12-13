@@ -1,0 +1,54 @@
+{
+    "China Post ePacket Economy Track（e邮宝特惠）": {
+        "min": 0,
+        "max": 5000
+    },
+    "UNI Economy Big": {
+        "min": 2000,
+        "max": 25000
+    },
+    "UNI Economy Budget": {
+        "min": 500,
+        "max": 25000
+    },
+    "UNI Economy Extra Small": {
+        "min": 0,
+        "max": 500
+    },
+    "UNI Economy Premium Big": {
+        "min": 5000,
+        "max": 25000
+    },
+    "UNI Economy Premium Small": {
+        "min": 0,
+        "max": 5000
+    },
+    "UNI Economy Small": {
+        "min": 0,
+        "max": 2000
+    },
+    "RETS Economy Big": {
+        "min": 2000,
+        "max": 25000
+    },
+    "RETS Economy Budget": {
+        "min": 500,
+        "max": 25000
+    },
+    "RETS Economy Extra Small": {
+        "min": 0,
+        "max": 500
+    },
+    "RETS Economy Premium Big": {
+        "min": 5000,
+        "max": 25000
+    },
+    "RETS Economy Premium Small": {
+        "min": 0,
+        "max": 5000
+    },
+    "RETS Economy Small": {
+        "min": 0,
+        "max": 2000
+    }
+}

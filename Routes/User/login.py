@@ -96,11 +96,7 @@ def protected():
         "create_time":user.create_time,
         "modify_time":user.modify_time,
     }
-    access_token = create_refresh_token(identity=data)
-
-    operate_log_writer_func(operateType=OperateType.user,describe=f"操作人:{user.username}, 操作: 登陆系统")
-
-
+    access_token = create_access_token(identity=data)
     return jsonify({"logged_in_as":data, "access_token":access_token}), 200
 
 
@@ -159,11 +155,11 @@ def modifyPassword():
                     else:
                         return jsonify({"msg": "new_password 字段不能为空！"}), 400
                 else:
-                    jsonify({"msg": "new_password 字段不能为空！"}), 400
+                    return jsonify({"msg": "new_password 字段不能为空！"}), 400
             else:
-                jsonify({"msg": "旧密码错误！"}), 400
+                return jsonify({"msg": "旧密码错误！"}), 400
         else:
-            jsonify({"msg": "password 字段不能为空！"}), 400
+            return jsonify({"msg": "password 字段不能为空！"}), 400
 
         try:
             db.session.add_all([user])

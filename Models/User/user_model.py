@@ -46,7 +46,7 @@ class User(db.Model):
         secondaryjoin='User.id == partners_system_products_association.c.partner_id',
         backref='partner_system_products_of'
     )
-
+    
     # 关联部门
     department_id = db.Column(db.Text, db.ForeignKey('department.id'))
 

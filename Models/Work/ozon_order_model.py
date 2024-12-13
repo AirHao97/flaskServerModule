@@ -7,6 +7,7 @@ description: ozon订单模型
 from Models import db
 import datetime
 from Models.User.user_model import User
+from Models.Work.purchase_product_model import PurchaseProduct
 
 
 # ozon采购 ozon商品 中间表
@@ -16,7 +17,8 @@ class OzonOrderOzonProduct(db.Model):
 
     order_id = db.Column(db.Text, db.ForeignKey('ozon_order.id'), primary_key=True)
     product_id = db.Column(db.Text, db.ForeignKey('ozon_product.id'), primary_key=True)
-    quantity = db.Column(db.Integer, nullable=False)  # 单个商品出售数量的字段
+    price = db.Column(db.Text, nullable=False, doc='单个商品此时的售价')
+    quantity = db.Column(db.Integer, nullable=False, doc="单个商品出售数量")
 
 class OzonOrder(db.Model):
 
@@ -50,21 +52,16 @@ class OzonOrder(db.Model):
     # 自定义字段
     total_price = db.Column(db.Text, doc='订单总价')
     system_status = db.Column(db.Text, doc='系统中状态')
-
-    approval_time = db.Column(db.Text, doc='通过运营审核时间')
-    dispatch_time = db.Column(db.Text, doc='出库时间')
-    shipping_time = db.Column(db.Text, doc='发货时间')
-    cancel_time = db.Column(db.Text, doc='作废时间')
+    approval_time = db.Column(db.DateTime, doc='通过运营审核时间')
+    dispatch_time = db.Column(db.DateTime, doc='出库时间')
 
     # 关联ozon产品
     ozon_products_msg = db.relationship('OzonOrderOzonProduct', backref='ozon_order')
-    
     # 关联店铺
     shop_id = db.Column(db.Text, db.ForeignKey('shop.id'))
 
-    # 关联创建者
-    creator = db.relationship('User', backref='ozon_orders')
-    creator_id = db.Column(db.Text, db.ForeignKey('user.id'))
+    # 关联采购商品
+    purchase_products = db.relationship('PurchaseProduct', backref='ozon_order')
 
     create_time = db.Column(db.DateTime, default = datetime.datetime.now, doc='创建时间')
     modify_time = db.Column(db.DateTime, onupdate = datetime.datetime.now, doc='修改时间')

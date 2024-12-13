@@ -16,7 +16,7 @@ def active_required(fn):
         if user and user.is_active:
             return fn(*args, **kwargs)
         else:
-            return jsonify({'message': '该账号未被启用，请联系管理员！'}), 403
+            return jsonify({'msg': '该账号未被启用，请联系管理员！'}), 400
     return wrapper
 
 # 系统管理员权限
@@ -28,7 +28,7 @@ def admin_required(fn):
         if user and user.is_admin:
             return fn(*args, **kwargs)
         else:
-            return jsonify({'message': '仅管理员可操作!本账号暂无操作权限！'}), 403
+            return jsonify({'msg': '仅管理员可操作!本账号暂无操作权限！'}), 400
     return wrapper
 
 # 系统管理员 + 部门管理员 + 小组管理员权限
@@ -54,7 +54,7 @@ def admin_all_required(fn):
                 if user_request.is_team_admin and user_request.team and user.team and user_request.team.id == user.team.id:
                     return  fn(*args, **kwargs)
                 else:
-                    return jsonify({'message': '仅管理员可操作!本账号暂无操作权限！'}), 403
+                    return jsonify({'msg': '仅管理员可操作!本账号暂无操作权限！'}), 400
     return wrapper
 
 # 运营权限
@@ -66,7 +66,7 @@ def operations_required(fn):
         if user and (user.is_admin or has_role(user,"1")):
             return fn(*args, **kwargs)
         else:
-            return jsonify({'message': '仅管理员或运营权限可操作!本账号暂无操作权限！'}), 403
+            return jsonify({'msg': '仅管理员或运营权限可操作!本账号暂无操作权限！'}), 400
     return wrapper
 
 # 采购权限
@@ -78,7 +78,7 @@ def purchasing_required(fn):
         if user and (user.is_admin or has_role(user,"2")):
             return fn(*args, **kwargs)
         else:
-            return jsonify({'message': '仅管理员或采购权限可操作!本账号暂无操作权限！'}), 403
+            return jsonify({'msg': '仅管理员或采购权限可操作!本账号暂无操作权限！'}), 400
     return wrapper
 
 # 打包权限
@@ -90,7 +90,7 @@ def packaging_required(fn):
         if user and (user.is_admin or has_role(user,"3")):
             return fn(*args, **kwargs)
         else:
-            return jsonify({'message': '仅管理员或打包权限可操作!本账号暂无操作权限！'}), 403
+            return jsonify({'msg': '仅管理员或打包权限可操作!本账号暂无操作权限！'}), 400
     return wrapper
 
 # 财务权限
@@ -102,5 +102,5 @@ def finance_required(fn):
         if user and (user.is_admin or has_role(user,"4")):
             return fn(*args, **kwargs)
         else:
-            return jsonify({'message': '仅管理员或财务权限可操作!本账号暂无操作权限！'}), 403
+            return jsonify({'msg': '仅管理员或财务权限可操作!本账号暂无操作权限！'}), 400
     return wrapper

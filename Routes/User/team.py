@@ -56,7 +56,7 @@ def getData():
     keyWord = str(request.args.get('keyWord', None))
 
     if keyWord:
-        columns = [column.name for column in Team.__table__.columns if column.name != 'id']
+        columns = [column.name for column in Team.__table__.columns ]
         filters = [getattr(Team, col).like(f'%{keyWord}%') for col in columns]
         query = Team.query.filter(or_(*filters))
     else:
@@ -64,19 +64,21 @@ def getData():
     
     # 判断是否是系统管理员
     if user and user.is_admin:
-        length = len(query.order_by(Team.create_time).all())
         results = query.order_by(Team.create_time).offset(start).limit(limit).all()
+        length = query.count()
     else:
         # 判断是否是部门管理员
         if user.is_department_admin and user.department:
-            length = len(query.filter_by(department_id=user.department_id).order_by(Team.create_time).all())
             results = query.filter_by(department_id=user.department_id).order_by(Team.create_time).offset(start).limit(limit).all()
+            length = query.filter_by(department_id=user.department_id).count()
         else:
             return jsonify({"msg": "当前账号无权限查看！"}), 400
         
     results = [{
         "id": result.id,
         "name": result.name,
+        "create_time": result.create_time,
+        "modify_time": result.modify_time,
         "department": {"id":result.department.id, "name":result.department.name} if result.department else {"id":"","name":""},
         "creator": {"id": result.creator.id, "username": result.creator.username} if result.creator else {"id":"","name":""},
         "users": [{"id":user_in_team.id,"username":user_in_team.username} for user_in_team in result.users]
@@ -85,10 +87,52 @@ def getData():
 
     return jsonify({
         "msg":"查询成功！",
-        "data":results,
-        "length":length
+        "data":{
+            "data":results,
+            "count":length
+        }
     }), 200 
 
+# 根据部门获取小组
+@team_list.route('/getDataFromDepartment', methods=['POST'])
+@jwt_required()
+@active_required
+def getDataFromDepartment():
+    current_user = get_jwt_identity()
+    user = User.query.filter_by(id=current_user['id']).first()
+
+    data = request.get_json()
+
+    if "department_id" in data:
+        department_id = data['department_id']
+    else:
+        return jsonify({"msg":"department_id 不能为空！"}),401
+    
+    # 判断是否是系统管理员
+    if user and user.is_admin:
+        query = Team.query.filter_by(department_id = department_id)
+        results = query.order_by(Team.create_time).all()
+    else:
+        return jsonify({"msg": "当前账号无权限查看！"}), 400
+        
+    results = [{
+        "id": result.id,
+        "name": result.name,
+        "create_time": result.create_time,
+        "modify_time": result.modify_time,
+        "department": {"id":result.department.id, "name":result.department.name} if result.department else {"id":"","name":""},
+        "creator": {"id": result.creator.id, "username": result.creator.username} if result.creator else {"id":"","name":""},
+        "users": [{"id":user_in_team.id,"username":user_in_team.username} for user_in_team in result.users]
+    } for result in results]
+
+
+    return jsonify({
+        "msg":"查询成功！",
+        "data":{
+            "data":results,
+            "count":query.count()
+        }
+    }), 200 
 
 # 新增数据（系统管理员、部门管理员可操作）
 @team_list.route('/addData', methods=['POST'])
@@ -145,8 +189,8 @@ def modifyData():
 
     # 判断是否是系统管理员
     if user and user.is_admin:
-        if "team_id" in data:
-            team_id = data["team_id"]
+        if "id" in data:
+            team_id = data["id"]
         else:
             {"msg":"team_id 不能为空！"},401
 
@@ -209,8 +253,8 @@ def deleteData():
 
     # 判断是否是系统管理员
     if user and user.is_admin:
-        if "team_id" in data:
-            team_id = data["team_id"]
+        if "id" in data:
+            team_id = data["id"]
         else:
             {"msg":"team_id 不能为空！"},401
 

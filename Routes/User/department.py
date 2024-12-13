@@ -16,6 +16,7 @@ from Utils.apiRightsDecorator import admin_required
 from Utils.logWriter import operate_log_writer_func,operate_log_writer_dec
 from Utils.Constant.operateType import OperateType
 
+from Models.User.user_model import User
 from Models.User.department_model import Department 
 
 
@@ -46,11 +47,38 @@ def initAdminAccount():
 @jwt_required()
 @admin_required
 def getData():
+    start = int(request.args.get('start', 0))
+    limit = int(request.args.get('limit', 10))
+    keyWord = str(request.args.get('keyWord', None))
 
-    # 可填写字段 start(从第几个数据开始，默认0) 
-    # limit(取多少条，默认10) 
-    # keyWord(模糊查询关键字 可以不传)
-    return getDataFromDataBase_BaseData(Department)
+    current_user = get_jwt_identity()
+    user = User.query.filter_by(id=current_user['id']).first()
+
+    if keyWord:
+        columns = [column.name for column in Department.__table__.columns ]
+        filters = [getattr(Department, col).like(f'%{keyWord}%') for col in columns]
+        query = Department.query.filter(or_(*filters))
+    else:
+        query = Department.query
+
+    if not user.is_admin:
+        query = query.filter_by(owner_id=current_user['id'])
+
+    results = query.order_by(Department.create_time).offset(start).limit(limit).all()
+    results = [{
+       "id": result.id,
+       "name": result.name,
+       "create_time": result.create_time,
+       "modify_time": result.modify_time,
+    } for result in results]
+
+    return jsonify({
+        "msg":"查询成功！",
+        "data":{
+            "data":results,
+            "count":len(results)
+        }
+    }), 200 
 
 
 # 新增数据
@@ -66,7 +94,42 @@ def addData():
 @jwt_required()
 @admin_required
 def modifyData(): 
-    return modifyDataFromDataBase(Department,OperateType.department)
+    current_user = get_jwt_identity() 
+    user = User.query.filter_by(id=current_user['id']).first()
+
+    if not user:
+        return {"msg":"找不到指定用户！"},401
+        
+    data = request.get_json()
+
+    if "id" in data:
+        department_id = data['id']
+    else:
+        return jsonify({"msg":"id 不能为空！"}),401
+
+    department = Department.query.filter_by(id=department_id).first()
+
+    if not department:
+        return {"msg":f"找不到id为{department_id}的部门！"},401
+
+    if (
+        # 系统管理员
+        user.is_admin
+    ):
+        modifyContext = []
+
+        if "name" in data:
+            modifyContext.append(f"name:({department.name} -> {data['name']})")
+            department.name = data['name']
+
+        try:
+            db.session.commit()
+            operate_log_writer_func(operateType=OperateType.department,describe=f"操作人:{user.username}, 操作:修改信息 id:{department.id}, 修改内容：{modifyContext}")
+            return {"msg":"部门信息修改成功！"}, 200  
+        except Exception as e:
+            return {"msg":"部门信息修改失败！"}, 400
+    else:
+        return {"msg":"当前账户无操作权限！"},400
 
 
 # 删除数据

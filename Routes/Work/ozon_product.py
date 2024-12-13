@@ -17,10 +17,12 @@ from Utils.crud import getDataFromDataBase_BaseData,addDataFromDataBase,modifyDa
 from Utils.apiRightsDecorator import admin_required,operations_required,active_required
 from Utils.logWriter import operate_log_writer_func,operate_log_writer_dec
 from Utils.Constant.operateType import OperateType
+from Utils.Constant.purchaseProductStatus import PurchaseProductStatus
 from Utils.ozonAPI import getProductInfo,getProductAttributes
 
 from Models.Work.system_product_model import SystemProduct
 from Models.Work.ozon_product_model import OzonProduct 
+from Models.Work.ozon_product_model import OzonProductSystemProduct 
 from Models.User.user_model import User
 
 ozon_product_list = Blueprint('ozon_product', __name__, url_prefix='/ozon_product')
@@ -135,7 +137,7 @@ def updataData():
         operate_log_writer_func(operateType=OperateType.ozonOrder,describe="开始加载ozon商品!")
         return jsonify({"msg": "ozon商品信息更新已启动!"}), 200
     else:
-        return jsonify({"msg": "ozon商品信息更新正在进行中..."}), 200
+        return jsonify({"msg": f"ozon商品信息更新正在进行中... {updataMsg['msg']}"}), 200
     
 # 获取当前数据更新进度
 # 登陆即可操作
@@ -164,7 +166,7 @@ def getData():
         keyWord = str(request.args.get('keyWord', None))
 
         if keyWord:
-            columns = [column.name for column in OzonProduct.__table__.columns if column.name != 'id']
+            columns = [column.name for column in OzonProduct.__table__.columns ]
             filters = [getattr(OzonProduct, col).like(f'%{keyWord}%') for col in columns]
             query = OzonProduct.query.filter(or_(*filters))
         else:
@@ -203,6 +205,8 @@ def getData():
             results = query.offset(start).limit(limit).all()
             count = query.count()
         else:
+            if not any(role.id == "1" for role in user.roles):
+                return {"msg":"当前账户无操作权限！"},400
             # 自己店铺下的id
             shop_ids = [item.id for item in user.owner_shops]
             # 可处理订单的关系伙伴下的店铺id
@@ -238,28 +242,29 @@ def getData():
 
                 "shop": {"id":result.shop.id, "name":result.shop.name},
                 "owner": {"id":result.shop.owner.id, "name":result.shop.owner.username} if result.shop.owner else None,
-                "creator": {"id":result.creator_id, "name":result.creator.username} if result.creator else None,
                 "create_time": result.create_time,
                 
                 "system_products":[
                     {
-                        "id": item.id,
-                        "primary_image": item.primary_image,
-                        "system_sku": item.system_sku,
-                        "reference_weight": item.reference_weight,
-                        "reference_cost": item.reference_cost,
-                        "purchase_mark": item.purchase_mark,
-                        "pack_mark": item.pack_mark,
-                        "purchase_link": item.purchase_link,
-                        "supplier_name": item.supplier_name,
-                        "stock_quantity": item.stock_quantity,
-                        "omitted_quantity": item.omitted_quantity,
-                        "in_transit_quantity": item.in_transit_quantity,
-                        "purchase_platform": item.purchase_platform,
-                        "creator": {"id":item.creator_id, "name":item.creator.username},
-                        "create_time": item.create_time,
+                        "id": item.system_product.id,
+                        "primary_image": item.system_product.primary_image,
+                        "system_sku": item.system_product.system_sku,
+                        "reference_weight": item.system_product.reference_weight,
+                        "reference_cost": item.system_product.reference_cost,
+                        "purchase_link": item.system_product.purchase_link,
+                        "supplier_name": item.system_product.supplier_name,
+                        "purchase_platform": item.system_product.purchase_platform,
+                        "creator": {"id":item.system_product.creator_id, "name":item.system_product.creator.username},
+                        "create_time": item.system_product.create_time,
+                        "quantity":item.quantity,
+                        "wait_for_purchase_quantity": len([item for item in item.system_product.purchase_products if item.status == PurchaseProductStatus.wait_purchase]),
+                        "in_basket_quantity": len([item for item in item.system_product.purchase_products if item.status == PurchaseProductStatus.in_basket]),
+                        "in_transit_quantity": len([item for item in item.system_product.purchase_products if item.status == PurchaseProductStatus.in_transit]),
+                        "stock_quantity":len([item for item in item.system_product.purchase_products if item.status == PurchaseProductStatus.in_stock]),
+                        "out_stock_quantity":len([item for item in item.system_product.purchase_products if item.status == PurchaseProductStatus.out_stock]),
+                        "loss_quantity":len([item for item in item.system_product.purchase_products if item.status == PurchaseProductStatus.loss]),
 
-                    } for item in result.system_products
+                    } for item in result.system_products_msg
                 ]
             } 
             for result in results],
@@ -296,20 +301,17 @@ def bindSystemProducts():
     if "ozon_product_id" in data:
         ozon_product_id = data['ozon_product_id']
     else:
-        jsonify({"msg":"ozon_product_id 不能为空！"}),401
+        return jsonify({"msg":"ozon_product_id 不能为空！"}),401
     
-    if "system_product_ids" in data:
-        system_product_ids = data['system_product_ids']
+    if "system_products_msg" in data:
+        system_products_msg = data['system_products_msg']
     else:
-        jsonify({"msg":"system_product_ids 不能为空！"}),401
-
+        return jsonify({"msg":"待绑定的系统内产品信息 不能为空！"}),401
+    
     ozon_product = OzonProduct.query.filter_by(id=ozon_product_id).first()
-
     if not ozon_product:
         return {"msg":"找不到指定的ozon_product"},401
-    
-    system_products = SystemProduct.query.filter(SystemProduct.id.in_(system_product_ids)).all()
-    
+
     if (
         # 系统管理员
         user.is_admin
@@ -322,12 +324,30 @@ def bindSystemProducts():
         # 当前账户属于 ozon产品的店铺的管理者的产品关联关系伙伴
         or (any(user.id == partner_system_products.id for partner_system_products in ozon_product.shop.owner.partners_system_products))
     ):
-    
-        ozon_product.system_products = system_products
+        
+        # 去掉所有原来关联的
+        OzonProductSystemProduct.query.filter_by(ozon_product_id=ozon_product_id).delete()
+
+        # 添加新的
+        addList_relation = []
+
+        for system_product_msg in system_products_msg:
+            system_product = SystemProduct.query.filter_by(id=system_product_msg["id"]).first()
+
+            if not system_product:
+                return {"msg":f'找不到对应的系统内产品id={system_product_msg["id"]}！'},400
+            
+            itemRelation = OzonProductSystemProduct()
+            itemRelation.ozon_product_id = ozon_product.id
+            itemRelation.system_product_id = system_product_msg["id"]
+            addList_relation.append(itemRelation)
+            itemRelation.quantity = system_product_msg["quantity"]
 
         try:
+            
+            db.session.add_all(addList_relation)
             db.session.commit()
-            operate_log_writer_func(operateType=OperateType.ozonProduct,describe=f"操作人:{user.username}, 操作:给ozon商品 id:{ozon_product.id} name:{ozon_product.name} 绑定系统内商品{[(item.id,item.system_sku) for item in system_products]}")
+            operate_log_writer_func(operateType=OperateType.ozonProduct,describe=f"操作人:{user.username}, 操作:给ozon商品 id:{ozon_product.id} name:{ozon_product.name} 绑定系统内商品{system_products_msg}")
             return {"msg":"系统内商品绑定成功！"}, 200  
         except Exception as e:
             return {"msg":"系统内商品绑定失败！"}, 400

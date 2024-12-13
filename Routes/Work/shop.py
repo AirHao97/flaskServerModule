@@ -12,7 +12,7 @@ from sqlalchemy import or_
 
 
 from Utils.crud import getDataFromDataBase_BaseData,addDataFromDataBase,modifyDataFromDataBase,deleteDataFromDataBase
-from Utils.apiRightsDecorator import admin_required,operations_required
+from Utils.apiRightsDecorator import admin_required,operations_required,active_required
 from Utils.logWriter import operate_log_writer_func,operate_log_writer_dec
 from Utils.Constant.operateType import OperateType
 
@@ -58,7 +58,8 @@ def initAdminAccount():
 # 查询数据
 @shop_list.route('/getData', methods=['GET'])
 @jwt_required()
-@operations_required
+@active_required
+@admin_required
 def getData():
 
     start = int(request.args.get('start', 0))
@@ -69,7 +70,7 @@ def getData():
     user = User.query.filter_by(id=current_user['id']).first()
 
     if keyWord:
-        columns = [column.name for column in Shop.__table__.columns if column.name != 'id']
+        columns = [column.name for column in Shop.__table__.columns ]
         filters = [getattr(Shop, col).like(f'%{keyWord}%') for col in columns]
         query = Shop.query.filter(or_(*filters))
     else:
@@ -79,11 +80,22 @@ def getData():
         query = query.filter_by(owner_id=current_user['id'])
 
     results = query.order_by(Shop.create_time).offset(start).limit(limit).all()
-    results = [{column.name: getattr(result, column.name) for column in Shop.__table__.columns} for result in results]
+    results = [{
+       "id": result.id,
+       "name": result.name,
+       "api_id": result.api_id,
+       "api_key": result.api_key,
+       "create_time": result.create_time,
+       "modify_time": result.modify_time,
+       "owner": {"id":result.owner.id,"name":result.owner.username} if result.owner else {}
+    } for result in results]
 
     return jsonify({
         "msg":"查询成功！",
-        "data":results
+        "data":{
+            "data":results,
+            "count":len(results)
+        }
     }), 200 
 
 
@@ -91,6 +103,7 @@ def getData():
 @shop_list.route('/addData', methods=['POST'])
 @jwt_required()
 @admin_required
+@active_required
 def addData():
     return addDataFromDataBase(Shop,OperateType.shop) 
 
@@ -99,13 +112,58 @@ def addData():
 @shop_list.route('/modifyData', methods=['POST'])
 @jwt_required()
 @admin_required
-def modifyData(): 
-    return modifyDataFromDataBase(Shop,OperateType.shop)
+@active_required
+def modifyData():
+
+    current_user = get_jwt_identity() 
+    user = User.query.filter_by(id=current_user['id']).first()
+
+    if not user:
+        return {"msg":"找不到指定用户！"},401
+        
+    data = request.get_json()
+
+    if "id" in data:
+        shop_id = data['id']
+    else:
+        return jsonify({"msg":"id 不能为空！"}),401
+
+    shop = Shop.query.filter_by(id=shop_id).first()
+
+    if not shop:
+        return {"msg":f"找不到id为{shop_id}的店铺！"},401
+
+    if (
+        # 系统管理员
+        user.is_admin
+    ):
+        modifyContext = []
+
+        if "api_id" in data:
+            modifyContext.append(f"api_id:({shop.api_id} -> {data['api_id']})")
+            shop.api_id = data['api_id']
+        if "api_key" in data:
+            modifyContext.append(f"api_key:({shop.api_key} -> {data['api_key']})")
+            shop.api_key = data['api_key']
+        if "name" in data:
+            modifyContext.append(f"name:({shop.name} -> {data['name']})")
+            shop.name = data['name']
+
+        try:
+            db.session.commit()
+            operate_log_writer_func(operateType=OperateType.shop,describe=f"操作人:{user.username}, 操作:修改信息 id:{shop.id}, 修改内容：{modifyContext}")
+            return {"msg":"店铺信息修改成功！"}, 200  
+        except Exception as e:
+            return {"msg":"店铺信息修改失败！"}, 400
+    else:
+        return {"msg":"当前账户无操作权限！"},400
+
 
 
 # 管理员删除数据
 @shop_list.route('/deleteData', methods=['POST'])
 @jwt_required()
 @admin_required
+@active_required
 def deleteData():
     return deleteDataFromDataBase(Shop,OperateType.shop)

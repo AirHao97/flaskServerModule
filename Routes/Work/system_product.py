@@ -8,14 +8,14 @@ from flask import Blueprint,jsonify,request
 from Models import db
 import uuid
 from flask_jwt_extended import jwt_required,get_jwt_identity
-from sqlalchemy import or_
+from sqlalchemy import or_,and_, cast, Integer
 import json
 
 from Utils.crud import getDataFromDataBase_BaseData,addDataFromDataBase,modifyDataFromDataBase,deleteDataFromDataBase
 from Utils.apiRightsDecorator import admin_required,operations_required,active_required
 from Utils.logWriter import operate_log_writer_func,operate_log_writer_dec
 from Utils.Constant.operateType import OperateType
-from Utils.API_1688 import get_supplier_name
+from Utils.Constant.purchaseProductStatus import PurchaseProductStatus
 
 from Models.Work.system_product_model import SystemProduct
 from Models.Work.ozon_product_model import OzonProduct 
@@ -38,7 +38,7 @@ def getData():
         keyWord = str(request.args.get('keyWord', None))
 
         if keyWord:
-            columns = [column.name for column in SystemProduct.__table__.columns if column.name != 'id']
+            columns = [column.name for column in SystemProduct.__table__.columns ]
             filters = [getattr(SystemProduct, col).like(f'%{keyWord}%') for col in columns]
             query = SystemProduct.query.filter(or_(*filters))
         else:
@@ -62,34 +62,58 @@ def getData():
                 "system_sku": result.system_sku,
                 "reference_weight": result.reference_weight,
                 "reference_cost": result.reference_cost,
-                "purchase_mark": result.purchase_mark,
-                "pack_mark": result.pack_mark,
                 "purchase_link": result.purchase_link,
                 "supplier_name": result.supplier_name,
-                "stock_quantity": result.stock_quantity,
-                "omitted_quantity": result.omitted_quantity,
-                "in_transit_quantity": result.in_transit_quantity,
                 "purchase_platform": result.purchase_platform,
                 "creator": {"id":result.creator_id, "name":result.creator.username},
                 "create_time": result.create_time,
+                "wait_for_purchase_quantity": len([item for item in result.purchase_products if item.status == PurchaseProductStatus.wait_purchase]),
+                "in_basket_quantity": len([item for item in result.purchase_products if item.status == PurchaseProductStatus.in_basket]),
+                "in_transit_quantity": len([item for item in result.purchase_products if item.status == PurchaseProductStatus.in_transit]),
+                "stock_quantity":len([item for item in result.purchase_products if item.status == PurchaseProductStatus.in_stock]),
+                "out_stock_quantity":len([item for item in result.purchase_products if item.status == PurchaseProductStatus.out_stock]),
+                "loss_quantity":len([item for item in result.purchase_products if item.status == PurchaseProductStatus.loss]),
+                "father_id": result.father_id,
+
+                "productId_1688": result.productId_1688,
+                "specId_1688": result.specId_1688,
+                "skuId_1688": result.skuId_1688,
                 
                 "ozon_products":[
                     {
-                        "id": item.id,
-                        "offer_id": item.offer_id,
-                        "name": item.name,
-                        "price": item.price,
-                        "currency_code": item.currency_code,
-                        "sku": item.sku,
+                        "id": item.ozon_product.id,
+                        "offer_id": item.ozon_product.offer_id,
+                        "name": item.ozon_product.name,
+                        "price": item.ozon_product.price,
+                        "currency_code": item.ozon_product.currency_code,
+                        "sku": item.ozon_product.sku,
                         
-                        "link": item.link,
-                        "mandatory_mark": item.mandatory_mark,
-                        "primary_image": item.primary_image,
-                        "product_id": item.product_id,
+                        "link": item.ozon_product.link,
+                        "mandatory_mark": item.ozon_product.mandatory_mark,
+                        "primary_image": item.ozon_product.primary_image,
+                        "product_id": item.ozon_product.product_id,
 
-                        "shop": {"id":item.shop.id, "name":item.shop.name},
-                        "create_time": item.create_time,
-                    } for item in result.ozon_products
+                        "shop": {"id":item.ozon_product.shop.id, "name":item.ozon_product.shop.name} if item.ozon_product.shop else {"id":"", "name":""},
+                        "create_time": item.ozon_product.create_time,
+                    } for item in result.ozon_products_msg
+                ],
+
+                "purchase_products":[
+                    {
+                        "id": purchase_product.id,
+                        "price": purchase_product.price,
+                        "stock_in_date": purchase_product.stock_in_date,
+                        "sku": purchase_product.sku,
+                        "type": purchase_product.type,
+                        "status": purchase_product.status,
+                        "mark": purchase_product.mark,
+                        "purchase_order_id": purchase_product.purchase_order_id,
+                        "ozon_order_id": purchase_product.ozon_order_id,
+                        "system_product_id": purchase_product.system_product_id,
+                        "create_time": purchase_product.create_time,
+                        "modify_time": purchase_product.modify_time,
+                    }
+                    for purchase_product in result.purchase_products
                 ]
             } 
             for result in results],
@@ -123,26 +147,17 @@ def addData():
 
     modifyContext = []
 
-    def is_integer_value(value):
-        if isinstance(value, int):
-            return True
-        elif isinstance(value, str) and value.isdigit():
-            return True
-        else:
-            return False
+
+    if "primary_image" in data:
+        modifyContext.append(f"商品主图:{data['primary_image']})")
+    else:
+        return {"msg":"商品主图不能为空！"},400
 
     if "system_skus" in data:
         modifyContext.append(f"系统sku:({data['system_skus']})")
         system_skus = data['system_skus']
     else:
         return {"msg":"属性集不能为空！"},400
-    
-    supplier_name = None
-
-    if "primary_image" in data:
-        modifyContext.append(f"商品主图:{data['primary_image']})")
-    else:
-        return {"msg":"商品主图不能为空！"},400
     
     if "reference_weight" in data:
         modifyContext.append(f"参考重量:({data['reference_weight']})")
@@ -154,80 +169,79 @@ def addData():
     else:
         return {"msg":"参考价格不能为空！"},400
     
-    if "purchase_mark" in data:
-        modifyContext.append(f"采购备注:({data['purchase_mark']})")
-    else:
-        return {"msg":"采购备注不能为空！"},400
-    
-    if "pack_mark" in data:
-        modifyContext.append(f"打包备注:({data['pack_mark']})")
-    else:
-        return {"msg":"打包备注不能为空！"},400
-    
     if "purchase_link" in data:
         modifyContext.append(f"采购链接:({data['purchase_link']})")
-        try:
-            pruchase_link_list = json.load(data['purchase_link'])
-            supplier_name = get_supplier_name(url = pruchase_link_list[0])
-        except:
-            supplier_name = "其他"
-        if supplier_name:
-            modifyContext.append(f"供应商名称:({supplier_name})")
     else:
         return {"msg":"采购链接不能为空！"},400
-
-    if "stock_quantity" in data:
-        modifyContext.append(f"库存量:({data['stock_quantity']})")
-        if not is_integer_value(data['stock_quantity']):
-            return {"msg":"库存量必须为整数！"},400
-    else:
-        return {"msg":"库存量不能为空！"},400
-        
-    if "omitted_quantity" in data:
-        modifyContext.append(f"缺货量:({data['omitted_quantity']})")
-        if not is_integer_value(data['omitted_quantity']):
-            return {"msg":"缺货量必须为整数！"},400
-    else:
-        return {"msg":"缺货量不能为空！"},400
-        
-    if "in_transit_quantity" in data:
-        modifyContext.append(f"在途量:({data['in_transit_quantity']})")
-        if not is_integer_value(data['in_transit_quantity']):
-            return {"msg":"在途量必须为整数！"},400
-    else:
-        return {"msg":"在途量不能为空！"},400
-        
+    
     if "purchase_platform" in data:
         modifyContext.append(f"商品采购平台:({data['purchase_platform']})")
     else:
         return {"msg":"商品采购平台不能为空！"},400
     
+    if "supplier_name" in data:
+        supplier_name = data["supplier_name"]
+    else:
+        supplier_name = "其他"
+    
+    modifyContext.append(f"供应商名称:({supplier_name})")
+
+    if "productId_1688" in data:
+        productId_1688 = data["productId_1688"]
+    else:
+        productId_1688 = ""
+    modifyContext.append(f"productId_1688:({productId_1688})")
+
+    if "specId_1688" in data:
+        specId_1688 = data["specId_1688"]
+    else:
+        specId_1688 = ""
+    modifyContext.append(f"specId_1688:({specId_1688})")
+
+    if "skuId_1688" in data:
+        skuId_1688 = data["skuId_1688"]
+    else:
+        skuId_1688 = ""
+    modifyContext.append(f"skuId_1688:({skuId_1688})")
+    
+    if "sku_front" in data:
+        modifyContext.append(f"系统sku前缀:({data['sku_front']})")
+        sku_front = data['sku_front']
+    else:
+        return {"msg":"sku前缀不能为空！"},400
+
+
+    if not current_user.department_id:
+        return {"msg":"当前新建系统内产品用户 部门不能为空！"},400 
 
     system_products = []
 
+    father_id = str(uuid.uuid1())
     for system_sku in system_skus:
         system_product = SystemProduct()
         system_products.append(system_product)
         system_product.id = str(uuid.uuid1())
+        system_product.father_id = father_id
         system_product.creator_id = current_user.id
         modifyContext.append(f"商品id:{system_product.id})")
 
-        system_product.system_sku = system_sku
+        system_product.system_sku = f"{sku_front}-{system_sku}"
         system_product.primary_image = data['primary_image']
         system_product.reference_weight = data['reference_weight']
         system_product.reference_cost = data['reference_cost']
-        system_product.purchase_mark = data['purchase_mark']
-        system_product.pack_mark = data['pack_mark']
         system_product.purchase_link = data['purchase_link']
 
         if supplier_name:
             system_product.supplier_name = supplier_name
+        if productId_1688:
+            system_product.productId_1688 = productId_1688
+        if specId_1688:
+            system_product.specId_1688 = specId_1688
+        if skuId_1688:
+            system_product.skuId_1688 = skuId_1688
 
-        system_product.stock_quantity = data['stock_quantity']
-        system_product.omitted_quantity = data['omitted_quantity']
-        system_product.in_transit_quantity = data['in_transit_quantity']
         system_product.purchase_platform = data['purchase_platform']
-
+        system_product.department_id = current_user.department_id
         
     try:
         db.session.add_all(system_products)
@@ -237,6 +251,102 @@ def addData():
     except Exception as e:
         return {"msg":"系统内商品新建失败！"}, 400
 
+# 新增数据
+# 系统管理员、部门管理员、小组管理员 和 运营可操作
+@system_product_list.route('/addDataWith1688Data', methods=['POST'])
+@jwt_required()
+@active_required
+def addDataWith1688Data():
+    current_user = get_jwt_identity()
+    current_user = User.query.filter_by(id=current_user['id']).first()
+    data = request.get_json()
+
+    if not current_user.is_admin:
+        if not (current_user.is_department_admin and current_user.department):
+            if not (current_user.is_team_admin and current_user.team):
+                if not any(role.id == "1" for role in current_user.roles):
+                    return {"msg":"当前账户无操作权限！"},400
+
+    modifyContext = []
+
+    
+    if "reference_weight" in data:
+        modifyContext.append(f"参考重量:({data['reference_weight']})")
+    else:
+        return {"msg":"参考重量不能为空！"},400
+    
+    if "reference_cost" in data:
+        modifyContext.append(f"参考价格:({data['reference_cost']})")
+    else:
+        return {"msg":"参考价格不能为空！"},400
+    
+    if "purchase_link" in data:
+        modifyContext.append(f"采购链接:({data['purchase_link']})")
+    else:
+        return {"msg":"采购链接不能为空！"},400
+    
+    if "purchase_platform" in data:
+        modifyContext.append(f"商品采购平台:({data['purchase_platform']})")
+    else:
+        return {"msg":"商品采购平台不能为空！"},400
+    
+    if "supplier_name" in data:
+        modifyContext.append(f"供应商名称:({data['supplier_name']})")
+    else:
+        return {"msg":"供应商名称不能为空！"},400
+    
+    if "sku_front_name" in data:
+        modifyContext.append(f"系统sku前缀:({data['sku_front_name']})")
+        sku_front_name = data['sku_front_name']
+    else:
+        return {"msg":"sku前缀不能为空！"},400
+    
+    if "products" in data:
+        modifyContext.append(f"1688商品数据:({data['products']})")
+        products = data['products']
+    else:
+        return {"msg":"sku前缀不能为空！"},400
+
+
+    if not current_user.department_id:
+        return {"msg":"当前新建系统内产品用户 部门不能为空！"},400 
+
+    system_products = []
+
+    father_id = str(uuid.uuid1())
+
+    for product in products:
+        system_product = SystemProduct()
+        system_products.append(system_product)
+        system_product.id = str(uuid.uuid1())
+        system_product.father_id = father_id
+        
+        system_product.creator_id = current_user.id
+        modifyContext.append(f"商品id:{system_product.id})")
+
+        system_product.system_sku = f"{sku_front_name}-{product['attr']}"
+        system_product.primary_image = product["imageUrl"]
+        system_product.reference_weight = data['reference_weight']
+        system_product.reference_cost = data['reference_cost']
+        system_product.purchase_link = data['purchase_link']
+
+
+        system_product.supplier_name = data['supplier_name']
+        system_product.productId_1688 = product["productId"]
+        system_product.specId_1688 = product["specId"]
+        system_product.skuId_1688 = product["skuId"]
+
+        system_product.purchase_platform = data['purchase_platform']
+        system_product.department_id = current_user.department_id
+        
+    try:
+        db.session.add_all(system_products)
+        db.session.commit()
+        operate_log_writer_func(operateType=OperateType.systemProduct, describe=f"操作人:{current_user.username}, 操作:新增系统内商品, id:{system_product.id}, 新增内容：{modifyContext}")
+        return {"msg":"系统内商品新建成功！"}, 200
+    except Exception as e:
+        return {"msg":"系统内商品新建失败！"}, 400
+    
 # 修改的系统内商品数据
 # 系统管理员、部门管理员、小组管理员 和 运营可操作
 # 系统管理员可修改全部数据
@@ -258,7 +368,7 @@ def modifyData():
     if "id" in data:
         system_product_id = data['id']
     else:
-        jsonify({"msg":"id 不能为空！"}),401
+        return jsonify({"msg":"id 不能为空！"}),401
 
     system_product = SystemProduct.query.filter_by(id=system_product_id).first()
 
@@ -282,49 +392,71 @@ def modifyData():
         if "primary_image" in data:
             modifyContext.append(f"商品主图:({system_product.primary_image} -> {data['primary_image']})")
             system_product.primary_image = data['primary_image']
+        
         if "system_sku" in data:
             modifyContext.append(f"系统sku:({system_product.system_sku} -> {data['system_sku']})")
             system_product.system_sku = data['system_sku']
+        
         if "reference_weight" in data:
             modifyContext.append(f"参考重量:({system_product.reference_weight} -> {data['reference_weight']})")
             system_product.reference_weight = data['reference_weight']
+        
         if "reference_cost" in data:
             modifyContext.append(f"参考价格:({system_product.reference_cost} -> {data['reference_cost']})")
             system_product.reference_cost = data['reference_cost']
-        if "purchase_mark" in data:
-            modifyContext.append(f"采购备注:({system_product.purchase_mark} -> {data['purchase_mark']})")
-            system_product.purchase_mark = data['purchase_mark']
-        if "pack_mark" in data:
-            modifyContext.append(f"打包备注:({system_product.pack_mark} -> {data['pack_mark']})")
-            system_product.pack_mark = data['pack_mark']
+        
         if "purchase_link" in data:
             modifyContext.append(f"采购链接:({system_product.purchase_link} -> {data['purchase_link']})")
             system_product.purchase_link = data['purchase_link']
 
+        if "purchase_platform" in data:
+            modifyContext.append(f"商品采购平台:({system_product.purchase_platform} -> {data['purchase_platform']})")
+            system_product.purchase_platform = data['purchase_platform']        
+
         if "supplier_name" in data:
             modifyContext.append(f"供应商名称:({system_product.supplier_name} -> {data['supplier_name']})")
             system_product.supplier_name = data['supplier_name']
-            # try:
-            #     pruchase_link_list = json.load(data['purchase_link'])
-            #     supplier_name = get_supplier_name(url = pruchase_link_list[0])
-            # except:
-            #     supplier_name = None
-            # if supplier_name:
-            #     modifyContext.append(f"供应商名称:({system_product.supplier_name} -> {supplier_name})")
-            #     system_product.supplier_name = supplier_name
 
-        if "stock_quantity" in data:
-            modifyContext.append(f"库存量:({system_product.stock_quantity} -> {data['stock_quantity']})")
-            system_product.stock_quantity = data['stock_quantity']
-        if "omitted_quantity" in data:
-            modifyContext.append(f"缺货量:({system_product.omitted_quantity} -> {data['omitted_quantity']})")
-            system_product.omitted_quantity = data['omitted_quantity']
-        if "in_transit_quantity" in data:
-            modifyContext.append(f"在途量:({system_product.in_transit_quantity} -> {data['in_transit_quantity']})")
-            system_product.in_transit_quantity = data['in_transit_quantity']
-        if "purchase_platform" in data:
-            modifyContext.append(f"商品采购平台:({system_product.purchase_platform} -> {data['purchase_platform']})")
-            system_product.purchase_platform = data['purchase_platform']
+        if "productId_1688" in data:
+            modifyContext.append(f"1688产品ID:({system_product.productId_1688} -> {data['productId_1688']})")
+            system_product.productId_1688 = data['productId_1688']
+
+        if "specId_1688" in data:
+            modifyContext.append(f"1688样式ID:({system_product.specId_1688} -> {data['specId_1688']})")
+            system_product.specId_1688 = data['specId_1688']
+
+        if "skuId_1688" in data:
+            modifyContext.append(f"1688SKU:({system_product.skuId_1688} -> {data['skuId_1688']})")
+            system_product.skuId_1688 = data['skuId_1688']
+        
+        if "is_all" in data:
+            if data["is_all"]:
+                modifyContext.append("同步修改采购平台、供应商名称、采购链接、参考重量、参考价格信息与同批次系统内商品")
+
+                father_id = system_product.father_id
+
+                system_products = SystemProduct.query.filter_by(father_id=father_id).all()
+                
+                
+                for item in system_products:
+                    word = f"修改变体{item.id}"
+
+                    word += f"{item.reference_weight} -> {data['reference_weight']}"
+                    item.reference_weight = data["reference_weight"]
+
+                    word += f"{item.reference_cost} -> {data['reference_cost']}"
+                    item.reference_cost = data["reference_cost"]
+
+                    word += f"{item.purchase_platform} -> {data['purchase_platform']}"
+                    item.purchase_platform = data["purchase_platform"]
+
+                    word += f"{item.supplier_name} -> {data['supplier_name']}"
+                    item.supplier_name = data["supplier_name"]
+
+                    word += f"{item.purchase_link} -> {data['purchase_link']}"
+                    item.purchase_link = data["purchase_link"]
+
+                    modifyContext.append(word)
 
         try:
             db.session.commit()
@@ -356,7 +488,7 @@ def deleteData():
     if "system_product_id" in data:
         system_product_id = data['system_product_id']
     else:
-        jsonify({"msg":"system_product_id 不能为空！"}),401
+        return jsonify({"msg":"system_product_id 不能为空！"}),400
 
     system_product = SystemProduct.query.filter_by(id=system_product_id).first()
 
@@ -375,6 +507,8 @@ def deleteData():
         # 当前账户属于 ozon产品的店铺的管理者的产品关联关系伙伴
         or (any(user.id == partner_system_products.id for partner_system_products in system_product.creator.partners_system_products))
     ):
+        if system_product.purchase_products:
+            return jsonify({"msg":f"当前系统内商品{system_product.id} 已经绑定了采购商品，无法删除！"}),400
 
         try:
             db.session.delete(system_product)
@@ -386,50 +520,3 @@ def deleteData():
             return {"msg":"删除失败！"}, 400 
     else:
         return {"msg":"当前账户无操作权限！"},400
-
-# 产品出库
-# 系统管理员、部门管理员 和 打包 可操作
-@system_product_list.route('/dispatchTheSystemProduct', methods=['POST'])
-@jwt_required()
-@active_required
-def dispatchTheSystemProduct():
-
-    current_user = get_jwt_identity()
-    current_user = User.query.filter_by(id=current_user['id']).first()
-
-    if not current_user.is_admin:
-        if not (current_user.is_department_admin):
-            if not any(role.id == "3" for role in current_user.roles):
-                return {"msg":"当前账户无操作权限！"},400
-        
-    data = request.get_json()
-
-    if "system_product_id" in data:
-        system_product_id = data['system_product_id']
-    else:
-        jsonify({"msg":"system_product_id 不能为空！"}),401
-    
-    system_product = SystemProduct.query.filter_by(id = system_product_id).all()
-
-    if not system_product:
-        return {"msg":"找不到指定的system_product"},401
-    
-    stock_quantity = int(system_product.stock_quantity) - 1
-
-    if stock_quantity < 0:
-        return jsonify({
-            "msg":"出库后,产品库存数量小于0,请检查产品库存数量是否正确！"
-        }), 200
-    
-    system_product.stock_quantity = stock_quantity
-
-    try:
-        db.session.commit()
-        operate_log_writer_func(operateType=OperateType.purchaseOrder, describe=f"操作人:{current_user.username}, 操作:系统内产品出库, id:{system_product.id}")
-        return jsonify({
-            "msg":"产品出库成功！"
-        }), 200
-    except Exception as e:
-        operate_log_writer_func(operateType=OperateType.purchaseOrder, describe=f"操作人:{current_user.username}, 操作:系统内产品出库, id:{system_product.id}, 报错：{e}")
-        return {"msg":"产品出库失败！"}, 400
-

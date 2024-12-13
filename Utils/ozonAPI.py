@@ -1,5 +1,7 @@
 import requests
 import json
+from PyPDF2 import PdfMerger
+import io
 
 # api_id = '221854'
 # api_key = '48d6d7e7-7842-4f21-a5a2-896dea7cd734'
@@ -274,23 +276,52 @@ def getProductAttributes(api_id,api_key,offer_id):
         print("响应内容:", response.text)
         return {"data":None, "msg":response.text, "code":400}
 
+# 获取一个pdf打印单
+def GetPackageLabel(api_id,api_key,posting_number):
+
+    headers = {
+        'Client-Id': api_id,
+        'Api-Key': api_key,
+        'Content-Type': 'application/json'
+    }
+
+    url = 'https://api-seller.ozon.ru/v2/posting/fbs/package-label'
+
+    data = {
+        "posting_number": [posting_number]
+    }
+
+    response = requests.post(url, headers=headers, json=data, timeout=max_wait_time)
+    
+    if response.status_code == 200:
+        # with open("label.pdf", "wb") as f:
+        #     f.write(response.content)
+        # print("PDF 文件已保存为 label.pdf")
+        return {"data":response.content, "msg":"响应成功！","code":200}
+        
+    else:
+        print("请求失败，状态码:", response.status_code)
+        print("响应内容:", response.text)
+        return {"data":None, "msg":response.text, "code":400}
 
 if __name__ == "__main__":
     # api_id = "767055"
     # api_key = "02c837e4-abfa-4779-ba7b-0cd06a22c058"
-    getOrders(
-        api_id = "1892609",
-        api_key = "c89ecffa-4fef-471c-a5c2-068cd2321754",
-        sinceTime="2024-10-01T00:00:00Z", 
-        toTime="2024-10-18T23:59:59Z",
-        limit=1000,
-        offset=0
-    )
-    # getProductInfo(
-    #     api_id = "221854",
-    #     api_key = "48d6d7e7-7842-4f21-a5a2-896dea7cd734",
-    #     # sku = "1409365448"
-    #     sku = "1409365448"
+    # getOrders(
+    #     api_id = "1892609",
+    #     api_key = "c89ecffa-4fef-471c-a5c2-068cd2321754",
+    #     sinceTime="2024-10-01T00:00:00Z", 
+    #     toTime="2024-10-18T23:59:59Z",
+    #     limit=1000,
+    #     offset=0
+    # )
+    # print(
+    #     getProductInfo(
+    #         api_id = "221854",
+    #         api_key = "48d6d7e7-7842-4f21-a5a2-896dea7cd734",
+    #         # sku = "1409365448"
+    #         sku = "1635790321"
+    #     )
     # )
     # getAttribute(
     #     api_id = "221854",
@@ -306,4 +337,22 @@ if __name__ == "__main__":
     #     api_key = "02c837e4-abfa-4779-ba7b-0cd06a22c058",
     #     packages = []
     # )
+    # 0149461543-0124-1
+    # 78699071-0282-1
+    # 合并多个 PDF 文件
+    merger = PdfMerger()  # 初始化 PDF 合并器
+    for postingNumber in ["0149461543-0124-1","78699071-0282-1"]:
+        res = GetPackageLabel(
+            api_id = "221854",
+            api_key = "48d6d7e7-7842-4f21-a5a2-896dea7cd734",
+            posting_number = postingNumber
+        )
+
+        if res["data"]:
+            merger.append(io.BytesIO(res["data"]))
+    
+    # 将合并的 PDF 保存到本地
+    with open("output.pdf", "wb") as output_file:
+        merger.write(output_file)
+
     pass

@@ -56,7 +56,7 @@ def getData():
     keyWord = str(request.args.get('keyWord', None))
 
     if keyWord:
-        columns = [column.name for column in User.__table__.columns if column.name != 'id']
+        columns = [column.name for column in User.__table__.columns ]
         filters = [getattr(User, col).like(f'%{keyWord}%') for col in columns]
         query = User.query.filter(or_(*filters))
     else:
@@ -80,6 +80,7 @@ def getData():
                 count = 1
                 results = [user]
 
+
     results = [{
         "id": result.id,
         "username": result.username,
@@ -89,10 +90,10 @@ def getData():
         "is_department_admin": result.is_department_admin,
         "is_team_admin": result.is_team_admin,
         "is_active": result.is_active,
-        "partners_orders": [{"id":partner_orders.username, "name":partner_orders.username} for partner_orders in  result.partners_orders],
-        "partners_system_products": [{"id":partner_system_products.username, "name":partner_system_products.username} for partner_system_products in  result.partners_system_products],
-        "roles":[{"id":role.id,"name":role.name} for role in user.roles],
-        "shops":[{"id":shop.id,"name":shop.name} for shop in user.owner_shops],
+        "partners_orders": [{"id":partner_orders.id, "name":partner_orders.username} for partner_orders in  result.partners_orders],
+        "partners_system_products": [{"id":partner_system_products.id, "name":partner_system_products.username} for partner_system_products in  result.partners_system_products],
+        "roles":[{"id":role.id,"name":role.name} for role in result.roles],
+        "shops":[{"id":shop.id,"name":shop.name} for shop in result.owner_shops],
         "department": {"id": result.department.id, "name":result.department.name} if result.department else {},
         "team": {"id": result.team.id, "name":result.team.name} if result.team else {},
         "last_login_time": result.last_login_time,
@@ -103,8 +104,10 @@ def getData():
 
     return jsonify({
         "msg":"查询成功！",
-        "data":results,
-        "count":count
+        "data":{
+            "data":results,
+            "count":count
+        }
     }), 200 
 
 # 新增用户数据（系统管理员可操作）
@@ -113,7 +116,37 @@ def getData():
 @active_required
 @admin_required
 def addData():
-    return addDataFromDataBase(User,OperateType.user)
+
+    current_user = get_jwt_identity()
+    current_user = User.query.filter_by(id=current_user['id']).first()
+
+    data = request.get_json()
+
+    if "username" in data:
+        username = data["username"]
+    else:
+        {"msg":"账号不能为空！"},401
+
+    user = User()
+    user.id = str(uuid.uuid1())
+    user.username = username
+    
+    if "email" in data:
+        user.email = data["email"]
+    if "telephone_number" in data:
+        user.telephone_number = data["telephone_number"]
+
+    user.password = user.set_password("123456")
+
+
+    try:
+        db.session.add_all([user])
+        db.session.commit()
+        operate_log_writer_func(operateType=OperateType.user, describe=f"操作人:{current_user.username}, 操作:新增账号, username:{username}")
+        return {"msg":"新增账号成功！"}, 200  
+    except Exception as e:
+        print(e)
+        return {"msg":"新增账号失败！"}, 400 
 
 # 修改用户基础数据（管理员和用户本人可操作）
 @user_list.route('/modifyData', methods=['POST'])
@@ -150,7 +183,199 @@ def modifyData():
         return {"msg":"用户信息修改成功！"}, 200  
     except Exception as e:
         return {"msg":"用户信息修改失败！"}, 400 
+
+# 修改用户（管理员综合修改用户数据+权限）
+@user_list.route('/adminModifyData', methods=['POST'])
+@jwt_required()
+@active_required
+def adminModifyData(): 
+    current_user = get_jwt_identity()
+    user = User.query.filter_by(id=current_user['id']).first()
+
+    # 判断是否是系统管理员
+    if user and user.is_admin:
+        data = request.get_json()
+        if "id" in data:
+            user_id = data['id']
+        else:
+            return {"msg":"user_id 不能为空！"},401
+        user = User.query.filter_by(id=user_id).first()
+
+    if user is None:
+        return jsonify({"msg": "未找到对应的对象！"}), 401
     
+    modifyContext = []
+
+    if "username" in data:
+        modifyContext.append(f"username:({user.username} -> {data['username']})")
+        user.username = data['username']
+    if "email" in data:
+        modifyContext.append(f"email:({user.email} -> {data['email']})")
+        user.email = data['email']
+    if "telephone_number" in data:
+        modifyContext.append(f"telephone_number:({user.telephone_number} -> {data['telephone_number']})")
+        user.telephone_number = data['telephone_number']
+    if "is_active" in data:
+        modifyContext.append(f"is_active:({user.is_active} -> {data['is_active']})")
+        user.is_active = data['is_active']
+    if "is_admin" in data:
+        modifyContext.append(f"is_admin:({user.is_admin} -> {data['is_admin']})")
+        user.is_admin = data['is_admin']
+
+    if "roles" in data:
+        role_ids = [item["id"] for item in data["roles"]]
+        role_ids = set(role_ids)
+        
+        roles = []
+
+        for role_id in role_ids:
+            role = Role.query.filter_by(id = role_id).first()
+            if role:
+                roles.append(role)
+            else:
+                return {"msg":f"role_id{role_id}无对应的角色"}, 400
+        
+        modifyContext.append(f"roles:({[{item.id,item.name } for item in user.roles]} -> {[{item.id,item.name } for item in roles]})")
+        user.roles = roles
+    else:
+      role_ids = roles = []
+  
+    if "partners_orders" in data:
+        
+        partners_orders_ids = [item["id"] for item in data["partners_orders"]]
+        partners_orders_ids = set(partners_orders_ids)
+        
+        if user.id in partners_orders_ids:
+            return {"msg":f"可处理订单伙伴不能包含自己！"}, 400
+
+        partners_orders = []
+
+        for partners_orders_id in partners_orders_ids:
+            partners_order = User.query.filter_by(id = partners_orders_id).first()
+            if partners_order:
+                partners_orders.append(partners_order)
+            else:
+                return {"msg":f"user_id{partners_orders_id}无对应的用户"}, 400
+        
+        modifyContext.append(f"partners_orders:({[{item.id,item.username } for item in user.partners_orders]} -> {[{item.id,item.username } for item in partners_orders]})")
+        user.partners_orders = partners_orders
+    
+    if "partners_system_products" in data:
+        
+        partners_system_products_ids = [item["id"] for item in data["partners_system_products"]]
+        partners_system_products_ids = set(partners_system_products_ids)
+        
+        if user.id in partners_system_products_ids:
+            return {"msg":f"可处理系统内商品伙伴不能包含自己！"}, 400
+
+        partners_system_products = []
+
+        for partners_system_products_id in partners_system_products_ids:
+            partners_system_product = User.query.filter_by(id = partners_system_products_id).first()
+            if partners_system_product:
+                partners_system_products.append(partners_order)
+            else:
+                return {"msg":f"user_id{partners_system_products_id}无对应的用户"}, 400
+        
+        modifyContext.append(f"partners_system_products:({[{item.id,item.username } for item in user.partners_system_products]} -> {[{item.id,item.username } for item in partners_system_products]})")
+        user.partners_system_products = partners_system_products
+
+    if "shops" in data:
+        
+        shops_ids = [item["id"] for item in data["shops"]]
+        shops_ids = set(shops_ids)
+
+        shops = []
+
+        for shops_id in shops_ids:
+            shop = Shop.query.filter_by(id = shops_id).first()
+            if shop:
+                shop.owner_id = user.id
+                shops.append(shop)
+            else:
+                return {"msg":f"shop_id{shops_id}无对应的店铺！"}, 400
+        
+        modifyContext.append(f"shops:({[{item.id,item.name } for item in user.owner_shops]} -> {[{item.id,item.name } for item in shops]})")
+
+    if "department_id" in data:
+        if data["department_id"]:
+            department = Department.query.filter_by(id = data["department_id"]).first()
+            if department:
+                modifyContext.append(f"department_id:({user.department_id} -> {data['department_id']})")
+                user.department_id = data['department_id']
+            else:
+                return {"msg":"选中的部门id无法找到对应的部门！"}, 400
+        else:
+            modifyContext.append(f"department_id:({user.department_id} -> {data['department_id']})")
+            user.department_id = data['department_id']
+            department = None
+    else:
+        department = None
+        
+    if "team_id" in data:
+        if data["team_id"]:
+            if department:
+                team = Team.query.filter_by(id = data["team_id"]).first()
+                if team:
+                    if team.department_id == department.id:
+                        if any(item == "1" for item in role_ids):
+                            modifyContext.append(f"team_id:({user.team_id} -> {data['team_id']})")
+                            user.team_id = data['team_id']
+                        else:
+                            return {"msg":f"必须有运营角色才能加入小组！"}, 400
+                    else:
+                        return {"msg":f"当前小组{team.name} 不在部门{department.name}下！"}, 400
+                else:
+                    return {"msg":"选中的小组id无法找到对应的小组！"}, 400
+            else:
+                return {"msg":"用户无部门的情况下不能分配运营小组！"}, 400
+        else:
+            team = None
+            modifyContext.append(f"team_id:({user.team_id} -> {data['team_id']})")
+            user.team_id = data['team_id']
+            user.is_team_admin = False
+    else:
+       team = None 
+
+    if "is_department_admin" in data:
+        if data["is_department_admin"] == True:
+            if department:
+                modifyContext.append(f"is_department_admin:({user.is_department_admin} -> {data['is_department_admin']})")
+                user.is_department_admin = data['is_department_admin']
+            else:
+                return {"msg":"用户无部门的情况下不能赋予其部门管理员权限！"}, 400
+        else:
+            modifyContext.append(f"is_department_admin:({user.is_department_admin} -> {data['is_department_admin']})")
+            user.is_department_admin = data['is_department_admin']
+
+
+    if "is_team_admin" in data:
+        if data["is_team_admin"] == True:
+            if department:
+                if team:
+                    if team.department_id == department.id:
+                        if any(item == "1" for item in role_ids):
+                            modifyContext.append(f"is_team_admin:({user.is_team_admin} -> {data['is_team_admin']})")
+                            user.is_team_admin = data['is_team_admin']
+                        else:
+                            return {"msg":f"必须有运营角色才能赋予小组管理员权限！"}, 400
+                    else:
+                        return {"msg":f"当前小组{team.name} 不在部门{department.name}下！"}, 400
+                else:
+                    return {"msg":"用户无小组的情况下不能赋予其小组管理员权限！"}, 400
+            else:
+                return {"msg":"用户无部门的情况下不能分配运营小组！"}, 400
+        else:
+            modifyContext.append(f"is_team_admin:({user.is_team_admin} -> {data['is_team_admin']})")
+            user.is_team_admin = data['is_team_admin']
+
+    try:
+        db.session.commit()
+        operate_log_writer_func(operateType=OperateType.user, describe=f"操作人:{current_user['username']}, 操作:修改数据, 操作内容：{modifyContext}")
+        return {"msg":"用户信息修改成功！"}, 200  
+    except Exception as e:
+        return {"msg":"用户信息修改失败！"}, 400
+      
 # 重置密码（仅管理员可操作）
 @user_list.route('/resetPassword', methods=['POST'])
 @jwt_required()
