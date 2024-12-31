@@ -7,7 +7,7 @@ description: 刀具CRUD接口
 from flask import Blueprint,jsonify,request
 from Models import db
 import uuid
-from flask_jwt_extended import jwt_required,get_jwt_identity
+from flask_jwt_extended import jwt_required,get_jwt
 from sqlalchemy import or_
 
 
@@ -48,7 +48,7 @@ def initData():
 @jwt_required()
 @active_required
 def getData():
-    current_user = get_jwt_identity()
+    current_user = get_jwt()
     user = User.query.filter_by(id=current_user['id']).first()
     
     start = int(request.args.get('start', 0))
@@ -117,7 +117,7 @@ def getData():
 @admin_required
 def addData():
 
-    current_user = get_jwt_identity()
+    current_user = get_jwt()
     current_user = User.query.filter_by(id=current_user['id']).first()
 
     data = request.get_json()
@@ -153,7 +153,7 @@ def addData():
 @jwt_required()
 @active_required
 def modifyData(): 
-    current_user = get_jwt_identity()
+    current_user = get_jwt()
     user = User.query.filter_by(id=current_user['id']).first()
 
     # 判断是否是系统管理员
@@ -187,9 +187,10 @@ def modifyData():
 # 修改用户（管理员综合修改用户数据+权限）
 @user_list.route('/adminModifyData', methods=['POST'])
 @jwt_required()
+@admin_required
 @active_required
 def adminModifyData(): 
-    current_user = get_jwt_identity()
+    current_user = get_jwt()
     user = User.query.filter_by(id=current_user['id']).first()
 
     # 判断是否是系统管理员
@@ -382,7 +383,7 @@ def adminModifyData():
 @active_required
 @admin_required
 def resetPassword():
-    current_user = get_jwt_identity()
+    current_user = get_jwt()
     user = User.query.filter_by(id=current_user['id']).first()
 
     data = request.get_json()
@@ -421,7 +422,7 @@ def deleteData():
 @active_required
 @admin_required
 def addAdmin():
-    current_user = get_jwt_identity()
+    current_user = get_jwt()
 
     data = request.get_json()
     if "user_id" in data:
@@ -448,7 +449,7 @@ def addAdmin():
 @active_required
 @admin_required
 def addDepartmentAdmin():
-    current_user = get_jwt_identity()
+    current_user = get_jwt()
 
     data = request.get_json()
 
@@ -480,7 +481,7 @@ def addDepartmentAdmin():
 @active_required
 @admin_required
 def addTeamAdmin():
-    current_user = get_jwt_identity()
+    current_user = get_jwt()
     user = User.query.filter_by(id=current_user['id']).first()
 
     data = request.get_json()
@@ -517,7 +518,7 @@ def addTeamAdmin():
 def addRoles():
     data = request.get_json()
 
-    current_user = get_jwt_identity()
+    current_user = get_jwt()
 
     if "user_id" in data:
         user_id = data['user_id']
@@ -552,7 +553,7 @@ def addRoles():
 def freezeUser():
     data = request.get_json()
 
-    current_user = get_jwt_identity()
+    current_user = get_jwt()
 
     if "user_id" in data:
         user_id = data['user_id']
@@ -581,7 +582,7 @@ def freezeUser():
 def unfreezeUser():
     data = request.get_json()
 
-    current_user = get_jwt_identity()
+    current_user = get_jwt()
 
     if "user_id" in data:
         user_id = data['user_id']
@@ -609,7 +610,7 @@ def unfreezeUser():
 @admin_all_required
 def addPartnersOrders():
 
-    current_user = get_jwt_identity()
+    current_user = get_jwt()
     current_user = User.query.filter_by(id=current_user['id']).first()
 
     data = request.get_json()
@@ -654,7 +655,7 @@ def addPartnersOrders():
 @admin_all_required
 def addPartnersSystemProducts():
 
-    current_user = get_jwt_identity()
+    current_user = get_jwt()
     current_user = User.query.filter_by(id=current_user['id']).first()
 
     data = request.get_json()
@@ -698,7 +699,7 @@ def addPartnersSystemProducts():
 @admin_required
 def addDepartment():
 
-    current_user = get_jwt_identity()
+    current_user = get_jwt()
 
     data = request.get_json()
 
@@ -739,7 +740,7 @@ def addDepartment():
 @admin_required
 def addTeam():
 
-    current_user = get_jwt_identity()
+    current_user = get_jwt()
 
     data = request.get_json()
 
@@ -782,7 +783,7 @@ def addTeam():
 @admin_required
 def addShops():
     
-    current_user = get_jwt_identity()
+    current_user = get_jwt()
 
     data = request.get_json()
 

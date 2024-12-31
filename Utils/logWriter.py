@@ -1,5 +1,5 @@
 from functools import wraps
-from flask_jwt_extended import get_jwt_identity
+from flask_jwt_extended import get_jwt
 from flask import jsonify
 import uuid
 
@@ -16,7 +16,7 @@ def operate_log_writer_func(operateType,describe,isSystem=False):
     log.describe = describe
 
     if not isSystem:
-        current_user = get_jwt_identity()
+        current_user = get_jwt()
         log.operator_id = current_user["id"]
 
     try:
@@ -37,7 +37,7 @@ def operate_log_writer_dec(operateType,describe,isSystem=False):
             log.describe = describe
 
             if not isSystem:
-                current_user = get_jwt_identity()
+                current_user = get_jwt()
                 log.operator_id = current_user["id"]
 
             try:

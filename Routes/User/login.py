@@ -6,7 +6,7 @@ description: 登陆模块接口
 
 from flask import Blueprint,request
 from flask import jsonify
-from flask_jwt_extended import create_access_token,create_refresh_token,jwt_required,get_jwt_identity
+from flask_jwt_extended import create_access_token,create_refresh_token,jwt_required,get_jwt
 import uuid
 import datetime
 
@@ -55,7 +55,8 @@ def login():
     except Exception as e:
         print ("修改失败！")
 
-    access_token = create_access_token(identity={"id":user.id,
+    access_token = create_access_token(identity= str(user.id),
+                                       additional_claims = {"id":user.id,
                                                  "username":user.username,
                                                  "passward":user.password,
                                                  "email":user.email,
@@ -78,7 +79,7 @@ def login():
 @login_list.route('/protected', methods=['GET'])
 @jwt_required()
 def protected():
-    current_user = get_jwt_identity()
+    current_user = get_jwt()
 
     user = User.query.filter_by(id=current_user['id']).first()
 
@@ -96,7 +97,7 @@ def protected():
         "create_time":user.create_time,
         "modify_time":user.modify_time,
     }
-    access_token = create_access_token(identity=data)
+    access_token = create_access_token(identity=str(data["id"]), additional_claims=data)
     return jsonify({"logged_in_as":data, "access_token":access_token}), 200
 
 
@@ -137,7 +138,7 @@ def registration():
 @login_list.route('/modifyPassword', methods=['POST'])
 def modifyPassword():
 
-    current_user = get_jwt_identity()
+    current_user = get_jwt()
     data = request.get_json()
     
     user =  User.query.filter_by(username=current_user["username"]).first()

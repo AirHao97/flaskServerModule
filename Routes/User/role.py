@@ -7,7 +7,7 @@ description: 刀具CRUD接口
 from flask import Blueprint,jsonify,request
 from Models import db
 import uuid
-from flask_jwt_extended import jwt_required,get_jwt_identity
+from flask_jwt_extended import jwt_required,get_jwt
 from sqlalchemy import or_
 
 

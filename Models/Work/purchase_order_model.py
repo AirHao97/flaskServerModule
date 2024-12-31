@@ -15,14 +15,20 @@ class PurchaseOrder(db.Model):
     
     id = db.Column(db.Text, primary_key=True, doc='采购id')
     purchase_id = db.Column(db.Text, doc='采购单号')
+    fill_purchase_id_time = db.Column(db.DateTime, doc='采购单号回填时间')
         
     price = db.Column(db.Text, doc='订单价格')
     shipping_fee = db.Column(db.Text, doc='运费')
+    back_fee = db.Column(db.Text, doc='退货费')
 
     posting_numbers = db.Column(db.Text, doc='国内运单号')
 
     # 物流
     logistics_status = db.Column(db.Text, doc='物流状态')
+
+
+    packer_msg = db.Column(db.Text, doc='打包入库异常留言')
+
 
     # 1688 pdd 线下
     purchase_platform = db.Column(db.Text, doc='采购平台')
@@ -32,7 +38,15 @@ class PurchaseOrder(db.Model):
     platform_status = db.Column(db.Text, doc='采购平台状态')
 
     is_error = db.Column(db.Boolean, default=False, doc='采购/入库 是否有异常')
-    error_words = db.Column(db.Text, doc='异常留言')
+    error_words = db.Column(db.Text, doc='采购咨询运营异常留言')
+    
+    now_turn = db.Column(db.Text, doc='当前留言的人是谁  运营/采购')
+
+    # 关联订单采购人
+    purchaser_id = db.Column(db.Text, db.ForeignKey('user.id'))
+    purchaser = db.relationship('User', backref='purchase_orders',foreign_keys=[purchaser_id])
+
+
 
     # 关联系统中维护的商品表
     system_product_id = db.Column(db.Text, db.ForeignKey('system_product.id'))

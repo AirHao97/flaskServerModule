@@ -19,4 +19,3 @@ class PurchaseStatus1688:
     success = "交易成功",
     cancel = "交易取消",
     terminated = "交易终止",
-

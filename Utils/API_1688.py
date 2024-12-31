@@ -205,7 +205,60 @@ def get1688OrderList(start_time,end_time,page,pageSize):
     if response.status_code == 200:
         formatted_response = json.dumps(response.json(), indent=4, ensure_ascii=False)
         # print(formatted_response)
+        
+        with open("data.json", 'w', encoding='utf-8') as f:
+            json.dump(response.json(), f, ensure_ascii=False, indent=4)
+        
         return {"data":response.json(), "msg":response.text, "code":200}
+    else:
+        print("请求失败，状态码:", response.status_code)
+        print("响应内容:", response.text)
+        return {"data":None, "msg":response.text, "code":400}
+
+# 获取 订单详情数据
+def get1688OrderDetail(order_id):
+
+    url = 'https://gw.open.1688.com/openapi'
+    api_info = f'param2/1/com.alibaba.trade/alibaba.trade.get.buyerView/{APP_KEY}'
+
+    data = {
+        "webSite": "1688",
+        "orderId": order_id,
+        "includeFields": "NativeLogistics",
+        "access_token": ACCESS_TOKEN
+    }
+
+    sign_str,signature = getSignature(api_info,data)
+
+    data["_aop_signature"] = signature
+
+    response = requests.post(url+"/"+api_info, data=data)
+
+    if response.status_code == 200:
+        data = response.json()
+        formatted_response = json.dumps(data, indent=4, ensure_ascii=False)
+        # print(formatted_response)
+        
+        results = []
+        if "logisticsItems" in data["result"]["nativeLogistics"]:
+            for item in data["result"]["nativeLogistics"]["logisticsItems"]:
+                results.append(item["logisticsBillNo"])
+        
+        refundStatus = ""
+
+        if "refundStatus" in data["result"]["baseInfo"]:
+            refundStatus = data["result"]["baseInfo"]["refundStatus"]
+            dic = {
+                "waitselleragree":"等待卖家同意",
+                "waitbuyermodify":"待买家修改",
+                "waitbuyersend":"等待买家退货",
+                "waitsellerreceive":"等待卖家确认收货",
+                "refundsuccess":"退款成功",
+                "refundclose":"退款失败"
+            }
+            refundStatus = dic[refundStatus]
+        
+        return {"data":results, "refundStatus":refundStatus, "msg":response.text, "code":200}
     else:
         print("请求失败，状态码:", response.status_code)
         print("响应内容:", response.text)
@@ -232,7 +285,7 @@ def create1688OrderPreview(cargoParamList):
         #     {
         #         "offerId": "693785593567",
         #         "specId": "4c111b2355f3f5d2c63a4a30216ca53e",
-        #         "quantity": "1"
+        #         "quantity": "2"
         #     },
         #     {
         #         "offerId": "693785593567",
@@ -276,7 +329,14 @@ def create1688OrderPreview(cargoParamList):
     response = requests.get(final_url)
 
     if response.status_code == 200:
-        return {"data":response.json(), "msg":response.text, "code":200}
+        # formatted_response = json.dumps(response.json(), indent=4, ensure_ascii=False)
+        # print(formatted_response)
+        data = response.json()
+        if "errorMsg" in data:
+            return {"data":None, "msg": data["errorMsg"], "code":400}
+
+        else: 
+            return {"data":data, "msg":response.text, "code":200}
     else:
         return {"data":None, "msg":response.text, "code":400}
 
@@ -358,8 +418,10 @@ if __name__ == "__main__":
     # print(results)
     
     # 获取订单数据
-    get1688OrderList("20241127000000000+0800","20241212115959000+0800",1,5)
-
+    # get1688OrderList("20241220000000000+0800","20241220235959000+0800",1,50)
+    # 获取订单详情数据
+    # print(get1688OrderDetail(order_id=2413606586102558276)) 
+    # print(get1688OrderDetail(order_id=2407038637508558276))
     # 下单
-    # flow = create1688OrderPreview()["data"]["orderPreviewResuslt"][0]["flowFlag"] if create1688OrderPreview()["data"] else None
+    flow = create1688OrderPreview("")["data"]["orderPreviewResuslt"][0]["flowFlag"]
     # print(create1688Order(flow)["data"])

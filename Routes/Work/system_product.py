@@ -7,7 +7,7 @@ description: 刀具CRUD接口
 from flask import Blueprint,jsonify,request
 from Models import db
 import uuid
-from flask_jwt_extended import jwt_required,get_jwt_identity
+from flask_jwt_extended import jwt_required,get_jwt
 from sqlalchemy import or_,and_, cast, Integer
 import json
 
@@ -29,7 +29,7 @@ system_product_list = Blueprint('system_product', __name__, url_prefix='/system_
 @jwt_required()
 @active_required
 def getData():
-    current_user = get_jwt_identity()
+    current_user = get_jwt()
     current_user = User.query.filter_by(id=current_user['id']).first()
 
     if current_user:
@@ -135,7 +135,7 @@ def getData():
 @jwt_required()
 @active_required
 def addData():
-    current_user = get_jwt_identity()
+    current_user = get_jwt()
     current_user = User.query.filter_by(id=current_user['id']).first()
     data = request.get_json()
 
@@ -156,6 +156,8 @@ def addData():
     if "system_skus" in data:
         modifyContext.append(f"系统sku:({data['system_skus']})")
         system_skus = data['system_skus']
+        if not system_skus or not system_skus[0]:
+            return {"msg":"属性集不能为空！"},400
     else:
         return {"msg":"属性集不能为空！"},400
     
@@ -257,7 +259,7 @@ def addData():
 @jwt_required()
 @active_required
 def addDataWith1688Data():
-    current_user = get_jwt_identity()
+    current_user = get_jwt()
     current_user = User.query.filter_by(id=current_user['id']).first()
     data = request.get_json()
 
@@ -357,7 +359,7 @@ def addDataWith1688Data():
 @jwt_required()
 @active_required
 def modifyData():
-    current_user = get_jwt_identity()
+    current_user = get_jwt()
     user = User.query.filter_by(id=current_user['id']).first()
 
     if not user:
@@ -458,6 +460,22 @@ def modifyData():
 
                     modifyContext.append(word)
 
+        if "is_all_pic" in data:
+            if data["is_all_pic"]:
+                modifyContext.append("同步修改产品主图信息与同批次系统内商品")
+
+                father_id = system_product.father_id
+
+                system_products = SystemProduct.query.filter_by(father_id=father_id).all()
+                              
+                for item in system_products:
+                    word = f"修改变体{item.id}"
+
+                    word += f"{item.primary_image} -> {data['primary_image']}"
+                    item.primary_image = data["primary_image"]
+
+                    modifyContext.append(word)
+
         try:
             db.session.commit()
             operate_log_writer_func(operateType=OperateType.ozonProduct,describe=f"操作人:{user.username}, 操作:修改信息 id:{system_product.id}, 修改内容：{modifyContext}")
@@ -477,7 +495,7 @@ def modifyData():
 @jwt_required()
 @active_required
 def deleteData():
-    current_user = get_jwt_identity()
+    current_user = get_jwt()
     user = User.query.filter_by(id=current_user['id']).first()
 
     if not user:
@@ -509,6 +527,9 @@ def deleteData():
     ):
         if system_product.purchase_products:
             return jsonify({"msg":f"当前系统内商品{system_product.id} 已经绑定了采购商品，无法删除！"}),400
+        
+        if system_product.ozon_products_msg:
+            return jsonify({"msg":f"当前系统内商品{system_product.id} 已经绑定了ozon商品，无法删除！"}),400
 
         try:
             db.session.delete(system_product)

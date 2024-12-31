@@ -7,7 +7,7 @@ description: CRUD接口封装
 from flask import jsonify,request
 from Models import db
 import uuid
-from flask_jwt_extended import get_jwt_identity
+from flask_jwt_extended import get_jwt
 from sqlalchemy import or_
 
 from Utils.logWriter import operate_log_writer_func,operate_log_writer_dec
@@ -52,7 +52,7 @@ def getDataFromDataBaseById_BaseData(Obj,id):
 # 添加数据
 def addDataFromDataBase(Obj,ObjType):
 
-    current_user = get_jwt_identity()
+    current_user = get_jwt()
     data = request.get_json()
 
     obj = Obj()
@@ -76,7 +76,7 @@ def addDataFromDataBase(Obj,ObjType):
 # 修改数据
 def modifyDataFromDataBase(Obj,ObjType):
 
-    current_user = get_jwt_identity()
+    current_user = get_jwt()
 
     data = request.get_json()
     id = data.get('id')
@@ -104,7 +104,7 @@ def modifyDataFromDataBase(Obj,ObjType):
 # 删除数据
 def deleteDataFromDataBase(Obj,ObjType):
 
-    current_user = get_jwt_identity()
+    current_user = get_jwt()
 
     data = request.get_json()
     id = data.get('id')

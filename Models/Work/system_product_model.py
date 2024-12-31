@@ -31,7 +31,7 @@ class SystemProduct(db.Model):
     productId_1688 = db.Column(db.Text, doc='1688产品id')
     specId_1688 = db.Column(db.Text, doc='1688款式id')
     skuId_1688 = db.Column(db.Text, doc='1688 sku')
-
+    
     # 同一批生成的父类标识
     father_id = db.Column(db.Text, doc='同一批生成的标识id')
 

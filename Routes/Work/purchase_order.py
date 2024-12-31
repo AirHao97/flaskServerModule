@@ -9,7 +9,7 @@ import pandas as pd
 from io import BytesIO
 from Models import db
 import uuid
-from flask_jwt_extended import jwt_required,get_jwt_identity
+from flask_jwt_extended import jwt_required,get_jwt
 from sqlalchemy import or_,cast, DateTime
 import json
 import math
@@ -20,8 +20,6 @@ from datetime import datetime, timedelta
 import threading
 import traceback
 
-
-
 from Utils.crud import getDataFromDataBase_BaseData,addDataFromDataBase,modifyDataFromDataBase,deleteDataFromDataBase
 from Utils.apiRightsDecorator import admin_required,operations_required,active_required
 from Utils.logWriter import operate_log_writer_func,operate_log_writer_dec
@@ -31,7 +29,7 @@ from Utils.Constant.purchaseProductType import PurchaseProductType
 from Utils.Constant.purchaseProductStatus import PurchaseProductStatus
 from Utils.Constant.systemStatus import SystemStatus
 from Utils.purchase_product_label_print import generate_qrcodes_pdf
-from Utils.API_1688 import get1688OrderList,create1688OrderPreview,create1688Order
+from Utils.API_1688 import get1688OrderList, get1688OrderDetail,create1688OrderPreview,create1688Order
 
 from Models.Work.purchase_order_model import PurchaseOrder
 from Models.Work.purchase_product_model import PurchaseProduct
@@ -50,7 +48,7 @@ purchase_order_list = Blueprint('purchase_order', __name__, url_prefix='/purchas
 @active_required
 def getData():
 
-    current_user = get_jwt_identity()
+    current_user = get_jwt()
     current_user = User.query.filter_by(id=current_user['id']).first()
 
     if current_user:
@@ -59,11 +57,25 @@ def getData():
         keyWord = request.args.get('keyWord', None)
         purchase_platform = request.args.get('purchase_platform',None)
         status = request.args.get('status',None)
+        is_ask = request.args.get('is_ask',None)
 
         if keyWord:
             columns = [column.name for column in PurchaseOrder.__table__.columns ]
             filters = [getattr(PurchaseOrder, col).like(f'%{keyWord}%') for col in columns]
             query = PurchaseOrder.query.filter(or_(*filters))
+
+            purchase_order_columns = [column.name for column in PurchaseOrder.__table__.columns ]
+            purchase_order_filters = [getattr(PurchaseOrder, col).like(f'%{keyWord}%') for col in purchase_order_columns]
+            system_product_columns = [column.name for column in SystemProduct.__table__.columns]
+            system_product_filters = [getattr(SystemProduct, col).like(f'%{keyWord}%') for col in system_product_columns]
+
+            filters = or_(*purchase_order_filters, *system_product_filters)
+
+            query = (
+                PurchaseOrder.query
+                .outerjoin(SystemProduct, SystemProduct.id == PurchaseOrder.system_product_id)
+                .filter(filters)
+            )
         else:
             query = PurchaseOrder.query
 
@@ -74,9 +86,20 @@ def getData():
                query = query.filter_by(status=status)
         
         if purchase_platform:
-            query = query.filter_by(purchase_platform=purchase_platform)
+            if purchase_platform == "全部":
+                pass
+            else:
+                query = query.filter_by(purchase_platform=purchase_platform)
         else:
             return {"msg":"平台选择不能为空！"},400
+        
+        if is_ask:
+            if is_ask == "全部":
+                pass
+            elif is_ask == "咨询中":
+                query = query.filter_by(is_error=True)
+            elif is_ask == "未咨询":
+                query = query.filter_by(is_error=False)
 
         if current_user.is_admin:
             pass
@@ -103,6 +126,9 @@ def getData():
                 "is_error": result.is_error,
                 "error_words": result.error_words,
                 "platform_status": result.platform_status,
+                "fill_purchase_id_time": result.fill_purchase_id_time,
+                "packer_msg":result.packer_msg,
+                "back_fee":result.back_fee,
 
                 "wait_for_purchase_quantity": len([item for item in result.purchase_products if item.status == PurchaseProductStatus.wait_purchase]),
                 "in_basket_quantity": len([item for item in result.purchase_products if item.status == PurchaseProductStatus.in_basket]),
@@ -110,7 +136,8 @@ def getData():
                 "stock_quantity": len([item for item in result.purchase_products if item.status == PurchaseProductStatus.in_stock]),
                 "out_stock_quantity": len([item for item in result.purchase_products if item.status == PurchaseProductStatus.out_stock]),
                 "loss_quantity": len([item for item in result.purchase_products if item.status == PurchaseProductStatus.loss]),
-                
+                "create_time": result.create_time,
+
                 "system_product": {
                     "id": result.system_product.id,
                     "primary_image": result.system_product.primary_image,
@@ -160,6 +187,7 @@ def getData():
                 "msg":"未找到对应用户！",
             }), 400  
 
+
 # 查询异常的采购数据
 # 系统管理员、部门管理员 和 运营 可操作
 @purchase_order_list.route('/operationGetErrorData', methods=['GET'])
@@ -167,7 +195,7 @@ def getData():
 @active_required
 def operationGetErrorData():
 
-    current_user = get_jwt_identity()
+    current_user = get_jwt()
     current_user = User.query.filter_by(id=current_user['id']).first()
 
     if current_user:
@@ -220,6 +248,9 @@ def operationGetErrorData():
                 "is_error": result.is_error,
                 "error_words": result.error_words,
                 "platform_status": result.platform_status,
+                "fill_purchase_id_time": result.fill_purchase_id_time,
+                "packer_msg":result.packer_msg,
+                "back_fee":result.back_fee,
 
                 "wait_for_purchase_quantity": len([item for item in result.purchase_products if item.status == PurchaseProductStatus.wait_purchase]),
                 "in_basket_quantity": len([item for item in result.purchase_products if item.status == PurchaseProductStatus.in_basket]),
@@ -277,6 +308,47 @@ def operationGetErrorData():
                 "msg":"未找到对应用户！",
             }), 400  
 
+# 手动修改采购订单的信息
+# 系统管理员、部门管理员 和 运营 可操作
+# 只能修改备注信息
+@purchase_order_list.route('/operationModifyData', methods=['POST'])
+@jwt_required()
+@active_required
+def operationModifyData(): 
+    current_user = get_jwt()
+    current_user = User.query.filter_by(id=current_user['id']).first()
+
+    data = request.get_json()
+
+    if "id" in data:
+        purchase_order_id = data['id']
+    else:
+        return jsonify({"msg":"id 不能为空！"}),401
+    
+    purchase_order = PurchaseOrder.query.filter_by(id = purchase_order_id).first()
+
+    if not purchase_order:
+        return {"msg":f"找不到id为{purchase_order_id}的采购订单！"},401
+
+    # 权限校验
+    if not current_user.is_admin:
+        if not (current_user.is_department_admin and purchase_order.department_id == current_user.department_id):
+            if not (any(role.id == "1" for role in current_user.roles) and purchase_order.department_id == current_user.department_id):
+                return {"msg":"当前账户无操作权限！"},400
+    
+    modifyContext = []
+
+
+    if "error_words" in data:
+        modifyContext.append(f"异常留言:({purchase_order.error_words} -> {data['error_words']})")
+        purchase_order.error_words = data['error_words']
+
+    try:
+        db.session.commit()
+        operate_log_writer_func(operateType=OperateType.purchaseOrder,describe=f"操作人:{current_user.username}, 操作:修改信息 id:{purchase_order.id}, 修改内容：{modifyContext}")
+        return {"msg":"回复成功！"}, 200  
+    except Exception as e:
+        return {"msg":"采购订单信息修改失败！"}, 400
 
 # 获取待采购订单的供应商列表
 # 系统管理员、部门管理员 和 采购 可操作
@@ -285,15 +357,34 @@ def operationGetErrorData():
 @active_required
 def getWaitForPurchaseOrderSupplier():
 
-    current_user = get_jwt_identity()
+    current_user = get_jwt()
     current_user = User.query.filter_by(id=current_user['id']).first()
 
     if current_user:
 
         if current_user.is_admin:
-            pass
+            supplier_names = (
+                db.session.query(SystemProduct.supplier_name)
+                .join(PurchaseOrder, PurchaseOrder.system_product_id == SystemProduct.id)
+                .filter(
+                    PurchaseOrder.purchase_platform == "1688",
+                    PurchaseOrder.status == PurchaseStatus.waitForPurchase
+                )
+                .distinct()
+                .all()
+            )
         elif current_user.department and (current_user.is_department_admin or any(role.id == "2" for role in current_user.roles)):
-            query = query.filter_by("department_id" == current_user.department_id)
+            supplier_names = (
+                db.session.query(SystemProduct.supplier_name)
+                .join(PurchaseOrder, PurchaseOrder.system_product_id == SystemProduct.id)
+                .filter(
+                    PurchaseOrder.purchase_platform == "1688",
+                    PurchaseOrder.status == PurchaseStatus.waitForPurchase,
+                    PurchaseOrder.department_id == current_user.department_id
+                )
+                .distinct()
+                .all()
+            )
         else:
             return {"msg":"当前账户无操作权限！"},400
 
@@ -332,25 +423,23 @@ def getWaitForPurchaseOrderSupplier():
 @active_required
 def getDataInPurchaseMode():
 
-    current_user = get_jwt_identity()
+    current_user = get_jwt()
     current_user = User.query.filter_by(id=current_user['id']).first()
+
+    supplier_name =  request.args.get('supplier_name',None)
+        
+    if supplier_name == None:
+        return jsonify({"msg":"供应商名字不能为空！"}),401
 
     if current_user:
 
         if current_user.is_admin:
-            pass
+            query = PurchaseOrder.query.filter_by(status = PurchaseStatus.waitForPurchase).filter_by(purchase_platform = "1688").join(SystemProduct,PurchaseOrder.system_product_id == SystemProduct.id).filter(SystemProduct.supplier_name == supplier_name)
+
         elif current_user.department and (current_user.is_department_admin or any(role.id == "2" for role in current_user.roles)):
-            query = query.filter_by("department_id" == current_user.department_id)
+            query = PurchaseOrder.query.filter_by(status = PurchaseStatus.waitForPurchase).filter_by(department_id = current_user.department_id).filter_by(purchase_platform = "1688").join(SystemProduct,PurchaseOrder.system_product_id == SystemProduct.id).filter(SystemProduct.supplier_name == supplier_name)
         else:
             return {"msg":"当前账户无操作权限！"},400
-
-        supplier_name =  request.args.get('supplier_name',None)
-        
-        if supplier_name == None:
-            return jsonify({"msg":"供应商名字不能为空！"}),401
-
-
-        query = PurchaseOrder.query.filter_by(status = PurchaseStatus.waitForPurchase).filter_by(purchase_platform = "1688").join(SystemProduct,PurchaseOrder.system_product_id == SystemProduct.id).filter(SystemProduct.supplier_name == supplier_name)
 
         results = query.order_by(PurchaseOrder.create_time).all()
         count = query.order_by(PurchaseOrder.create_time).count()
@@ -370,6 +459,9 @@ def getDataInPurchaseMode():
                 "is_error": result.is_error,
                 "error_words": result.error_words,
                 "platform_status": result.platform_status,
+                "fill_purchase_id_time": result.fill_purchase_id_time,
+                "packer_msg":result.packer_msg,
+                "back_fee":result.back_fee,
 
                 "wait_for_purchase_quantity": len([item for item in result.purchase_products if item.status == PurchaseProductStatus.wait_purchase]),
                 "in_basket_quantity": len([item for item in result.purchase_products if item.status == PurchaseProductStatus.in_basket]),
@@ -433,7 +525,7 @@ def getDataInPurchaseMode():
 @jwt_required()
 @active_required
 def updateData():
-    current_user = get_jwt_identity()
+    current_user = get_jwt()
     current_user = User.query.filter_by(id=current_user['id']).first()
     
     if current_user:
@@ -445,7 +537,10 @@ def updateData():
             ozon_orders = OzonOrder.query.filter_by(system_status = SystemStatus.reviewedPendingStock).join(Shop, OzonOrder.shop_id == Shop.id).join(User,Shop.owner_id == User.id).filter(User.department_id == current_user.department_id).order_by(cast(OzonOrder.in_process_at, DateTime)).all()
         else:
             return {"msg":"当前账户无操作权限！"},400
-                
+
+        # 订单有国内运单号并且在系统内审核的
+        # ozon_orders = [ozon_order for ozon_order in ozon_orders if (ozon_order.tracking_number and ozon_order.audit_in_system)]
+        ozon_orders = [ozon_order for ozon_order in ozon_orders if ozon_order.tracking_number]     
 
         for ozon_order in ozon_orders:
             # 已经绑定的全部采购商品
@@ -476,6 +571,7 @@ def updateData():
                             # 有库存
                             if purchase_product:
                                 purchase_product_add_flag = False
+                                purchase_order_add_flag = False
                             # 无库存
                             else:
                                 purchase_product_add_flag = True
@@ -507,8 +603,11 @@ def updateData():
                                     purchase_order.purchase_platform = system_product.purchase_platform
                                     purchase_order.status = PurchaseStatus.waitForPurchase
                                     purchase_order.system_product_id = system_product.id
-                                    purchase_order.department_id = ozon_order.shop.owner.department_id
-
+                                    if ozon_order.shop.owner:
+                                        purchase_order.department_id = ozon_order.shop.owner.department_id
+                                    else:
+                                        return {"msg": f"店铺{ozon_order.shop.name} 尚未分配责任人！"}, 400
+                                    
                                 # 采购商品绑定采购单
                                 purchase_product.purchase_order_id = purchase_order.id
 
@@ -536,7 +635,7 @@ def updateData():
                                 
                                 db.session.commit()
                             except Exception as e:
-                                operate_log_writer_func(operateType=OperateType.purchaseOrder, describe=f"操作人:{current_user.username}, 操作:更新采购单, id:{purchase_order.id}, 报错：{e}")
+                                operate_log_writer_func(operateType=OperateType.purchaseOrder, describe=f"操作人:{current_user.username}, 操作:更新采购单, 报错：{e}")
                                 return {"msg": f"采购单更新失败！{e}"}, 400
                     
                     # 绑定过采购商品
@@ -745,7 +844,7 @@ def updateData():
                                     if purchase_order_add_flag:
                                         operate_log_writer_func(operateType=OperateType.purchaseOrder, describe=f"操作人:{current_user.username}, 操作:新增采购单, id:{purchase_order.id}")                                
                                     if purchase_product_add_flag:
-                                        operate_log_writer_func(operateType=OperateType.purchaseProduct, describe=f"操作人:{current_user.username}, 操作:新增采购商品, 库存采购订单id:{purchase_product.id},用于 ozon订单{ozon_order.id},绑定采购订单{purchase_order.id}")
+                                        operate_log_writer_func(operateType=OperateType.purchaseProduct, describe=f"操作人:{current_user.username}, 操作:新增采购商品, 库存采购商品id:{purchase_product.id},用于 ozon订单{ozon_order.id},绑定采购订单{purchase_order.id}")
                                     else:
                                         operate_log_writer_func(operateType=OperateType.purchaseProduct, describe=f"操作人:{current_user.username}, 操作:申用库存采购商品, 库存采购商品id:{purchase_product.id} 用于 ozon订单{ozon_order.id}")
                                     
@@ -768,7 +867,7 @@ def updateData():
 @jwt_required()
 @active_required
 def fillThePurchaseIdForPurchaseOrders(): 
-    current_user = get_jwt_identity()
+    current_user = get_jwt()
     current_user = User.query.filter_by(id=current_user['id']).first()
 
     if not current_user.is_admin:
@@ -782,10 +881,17 @@ def fillThePurchaseIdForPurchaseOrders():
         purchase_order_ids = data['purchase_order_ids']
     else:
         return jsonify({"msg":"修改采购单列表 不能为空！"}),401
+    
+    if not purchase_order_ids:
+        return jsonify({"msg":"修改采购单列表 不能为空！"}),401
+        
 
     if "purchase_id" in data:
         purchase_id = data['purchase_id']
     else:
+        return jsonify({"msg":"运单号 不能为空！"}),401
+    
+    if not purchase_id:
         return jsonify({"msg":"运单号 不能为空！"}),401
     
     purchase_orders = PurchaseOrder.query.filter((PurchaseOrder.id.in_(purchase_order_ids))).all()
@@ -800,8 +906,16 @@ def fillThePurchaseIdForPurchaseOrders():
         # 填写运单号
         if purchase_order.purchase_id:
             return jsonify({"msg": f"采购单{purchase_order.id} 已经存在订单号！"}),400    
+        
         purchase_order.purchase_id = purchase_id
+        purchase_order.purchaser_id = current_user.id
+        # 新增填写运单号的时间
+        purchase_order.fill_purchase_id_time = datetime.now()
+
         # 更改采购单状态
+        if not purchase_order.status == PurchaseStatus.waitForPurchase:
+            return jsonify({"msg": f"采购单{purchase_order.id} 当前状态为{purchase_order.status},无法添加采购单号！"}),400  
+         
         modifyContext.append(f"采购订单{purchase_order.id} 状态变更 {purchase_order.status} => {PurchaseStatus.inTransit}")
         purchase_order.status = PurchaseStatus.inTransit
         # 采购商品更改状态
@@ -826,7 +940,7 @@ def fillThePurchaseIdForPurchaseOrders():
 @jwt_required()
 @active_required
 def fillThePurchaseIdForPurchaseOrder(): 
-    current_user = get_jwt_identity()
+    current_user = get_jwt()
     current_user = User.query.filter_by(id=current_user['id']).first()
 
     if not current_user.is_admin:
@@ -835,21 +949,30 @@ def fillThePurchaseIdForPurchaseOrder():
                     return {"msg":"当前账户无操作权限！"},400
         
     data = request.get_json()
-
+    
     if "purchase_order_id" in data:
         purchase_order_id = data['purchase_order_id']
     else:
         return jsonify({"msg":"修改采购单列表 不能为空！"}),401
+    
+    if not purchase_order_id:
+        return jsonify({"msg":"修改采购单列表 不能为空！"}),401
+        
 
     if "purchase_id" in data:
         purchase_id = data['purchase_id']
     else:
         return jsonify({"msg":"运单号 不能为空！"}),401
     
+    if not purchase_id:
+        return jsonify({"msg":"运单号 不能为空！"}),401
+    
     purchase_order = PurchaseOrder.query.filter_by(id = purchase_order_id).first()
     
+    if not purchase_order.status == PurchaseStatus.waitForPurchase:
+        return jsonify({"msg": f"采购单{purchase_order.id} 当前状态为{purchase_order.status},无法添加采购单号！"}),400
+    
     modifyContext = []
-
 
     if not current_user.is_admin:
         if purchase_order.department_id != current_user.department_id:
@@ -861,6 +984,11 @@ def fillThePurchaseIdForPurchaseOrder():
 
     purchase_order.purchase_id = purchase_id
     # 更改采购单状态
+    purchase_order.purchaser_id = current_user.id
+    # 新增填写运单号的时间
+    purchase_order.fill_purchase_id_time = datetime.now()
+
+
     modifyContext.append(f"采购订单{purchase_order.id} 状态变更 {purchase_order.status} => {PurchaseStatus.inTransit}")
     purchase_order.status = PurchaseStatus.inTransit
     
@@ -886,7 +1014,7 @@ def fillThePurchaseIdForPurchaseOrder():
 @jwt_required()
 @active_required
 def modifyData(): 
-    current_user = get_jwt_identity()
+    current_user = get_jwt()
     current_user = User.query.filter_by(id=current_user['id']).first()
 
     data = request.get_json()
@@ -933,6 +1061,12 @@ def modifyData():
     if "error_words" in data:
         modifyContext.append(f"异常留言:({purchase_order.error_words} -> {data['error_words']})")
         purchase_order.error_words = data['error_words']
+    if "shipping_fee" in data:
+        modifyContext.append(f"运费:({purchase_order.shipping_fee} -> {data['shipping_fee']})")
+        purchase_order.shipping_fee = data['shipping_fee']
+    if "back_fee" in data:
+        modifyContext.append(f"退货费用:({purchase_order.back_fee} -> {data['back_fee']})")
+        purchase_order.back_fee = data['back_fee']
 
     try:
         db.session.commit()
@@ -948,7 +1082,7 @@ def modifyData():
 @active_required
 def cancleThePurchaseOrder(): 
 
-    current_user = get_jwt_identity()
+    current_user = get_jwt()
     current_user = User.query.filter_by(id=current_user['id']).first()
 
     if not current_user.is_admin:
@@ -1001,7 +1135,7 @@ def cancleThePurchaseOrder():
 @active_required
 def getThePostingOfPurchaseOrder():
 
-    current_user = get_jwt_identity()
+    current_user = get_jwt()
     current_user = User.query.filter_by(id=current_user['id']).first()
 
     if not current_user.is_admin:
@@ -1045,6 +1179,9 @@ def getThePostingOfPurchaseOrder():
                 "is_error": result.is_error,
                 "error_words": result.error_words,
                 "platform_status": result.platform_status,
+                "fill_purchase_id_time": result.fill_purchase_id_time,
+                "packer_msg":result.packer_msg,
+                "back_fee":result.back_fee,
 
                 "wait_for_purchase_quantity": len([item for item in result.purchase_products if item.status == PurchaseProductStatus.wait_purchase]),
                 "in_basket_quantity": len([item for item in result.purchase_products if item.status == PurchaseProductStatus.in_basket]),
@@ -1108,7 +1245,7 @@ def getThePostingOfPurchaseOrder():
 @active_required
 def signTheSystemProductsOfPurchaseOrder():
 
-    current_user = get_jwt_identity()
+    current_user = get_jwt()
     current_user = User.query.filter_by(id=current_user['id']).first()
 
     if not current_user.is_admin:
@@ -1128,10 +1265,14 @@ def signTheSystemProductsOfPurchaseOrder():
     else:
         return jsonify({"msg":"国内运单号信息 不能为空！"}),401
     
+
+    products = []
+
     for purchase_order_msg in purchase_order_msgs:
 
         purchase_order_id = purchase_order_msg["id"]
         quantity = purchase_order_msg["quantity"]
+        msg = purchase_order_msg["msg"]
 
         purchase_order = PurchaseOrder.query.filter_by(id = purchase_order_id).first()
 
@@ -1144,6 +1285,9 @@ def signTheSystemProductsOfPurchaseOrder():
             
         if not purchase_order.status == PurchaseStatus.inTransit:
             return jsonify({"msg":f"采购订单{purchase_order.id}的状态为{purchase_order.status}，无法签收，请检查采购订单状态！"}),400
+        
+        if msg:
+            purchase_order.packer_msg = msg
         
         purchase_products_wait_for_sign = [item for item in purchase_order.purchase_products if item.status == PurchaseProductStatus.in_transit]
         purchase_products_wait_for_sign_numbers = len(purchase_products_wait_for_sign)
@@ -1170,11 +1314,12 @@ def signTheSystemProductsOfPurchaseOrder():
                 return jsonify({"msg": f"运单号 {posting_number} 不存在于采购单 {purchase_order.id}，请检查后重试！ "}),400
 
             # 给系统内商品依次入库
-            products = []
+            
             for index in range(int(quantity)):
                 purchase_product_wait_for_sign = purchase_products_wait_for_sign[index]
                 purchase_product_wait_for_sign.status = PurchaseProductStatus.in_basket
                 purchase_product_wait_for_sign.stock_in_date = datetime.now()
+                purchase_product_wait_for_sign.stock_in_id = current_user.id
 
                 products.append(
                     {
@@ -1198,6 +1343,9 @@ def signTheSystemProductsOfPurchaseOrder():
                         item.status = PurchaseProductStatus.loss
                         item.ozon_order_id = None
                         item.loss_date = datetime.now()
+                        item.mark = "绑定的国内运单全部入库，但是产品数量少了"
+                        if msg:
+                            item.mark += f"采购留言：{msg}"
         
         elif int(quantity) == int(purchase_products_wait_for_sign_numbers):
 
@@ -1214,11 +1362,11 @@ def signTheSystemProductsOfPurchaseOrder():
             purchase_order.status = PurchaseStatus.finished
 
             # 给系统内商品依次入库
-            products = []
             for index in range(int(quantity)):
                 purchase_product_wait_for_sign = purchase_products_wait_for_sign[index]
                 purchase_product_wait_for_sign.status = PurchaseProductStatus.in_basket
                 purchase_product_wait_for_sign.stock_in_date = datetime.now()
+                purchase_product_wait_for_sign.stock_in_id = current_user.id
 
                 products.append(
                     {
@@ -1230,8 +1378,8 @@ def signTheSystemProductsOfPurchaseOrder():
                     }
                 )
 
-            if products:
-                pdf_byte_arr = generate_qrcodes_pdf(products)
+    if products:
+        pdf_byte_arr = generate_qrcodes_pdf(products)
 
     try:
         db.session.commit()
@@ -1251,7 +1399,7 @@ def signTheSystemProductsOfPurchaseOrder():
 @active_required
 def getInTransitPurchaseOrderData():
 
-    current_user = get_jwt_identity()
+    current_user = get_jwt()
     current_user = User.query.filter_by(id=current_user['id']).first()
 
     if current_user:
@@ -1294,6 +1442,9 @@ def getInTransitPurchaseOrderData():
                 "is_error": result.is_error,
                 "error_words": result.error_words,
                 "platform_status": result.platform_status,
+                "fill_purchase_id_time": result.fill_purchase_id_time,
+                "packer_msg":result.packer_msg,
+                "back_fee":result.back_fee,
 
                 "wait_for_purchase_quantity": len([item for item in result.purchase_products if item.status == PurchaseProductStatus.wait_purchase]),
                 "in_basket_quantity": len([item for item in result.purchase_products if item.status == PurchaseProductStatus.in_basket]),
@@ -1351,72 +1502,6 @@ def getInTransitPurchaseOrderData():
                 "msg":"未找到对应用户！",
             }), 400 
 
-# 接收更新excel 更新采购单信息
-# 系统管理员、部门管理员 和 采购 可操作
-@purchase_order_list.route('/updatePurchaseOrdersWithExcel', methods=['POST'])
-@jwt_required()
-@active_required
-def updatePurchaseOrdersWithExcel():
-
-    current_user = get_jwt_identity()
-    current_user = User.query.filter_by(id=current_user['id']).first()
-
-    if current_user:
-
-        if current_user.is_admin:
-            pass
-        elif current_user.department and (current_user.is_department_admin or any(role.id == "2" for role in current_user.roles)):
-            query = query.filter_by(department_id = current_user.department_id)
-        else:
-            return {"msg":"当前账户无操作权限！"},400
-        
-        if 'file' not in request.files:
-            return jsonify({'error': '无上传文件！'}), 400
-
-        file = request.files['file']
-        if file.filename == '':
-            return jsonify({'error': '无上传文件！'}), 400
-        try:
-            # 将文件内容解析为 pandas DataFrame
-            file_stream = BytesIO(file.read())  # 读取文件内容到内存
-            def safe_convert_to_decimal(value):
-                try:
-                    return str(Decimal(value))  # 转换成功返回字符串
-                except:
-                    return None  # 无效值返回 None
-
-            # 读取文件并应用转换
-            df = pd.read_excel(file_stream, converters={'订单编号': safe_convert_to_decimal})
-            processed_data = df.to_dict(orient='records')  # 将数据转为字典列表
-            processed_data = processed_data
-
-            for order in processed_data:
-                purchase_id = order["订单编号"]
-                if purchase_id:
-                    purchase_orders = PurchaseOrder.query.filter_by(purchase_id=purchase_id).all()
-                    for purchase_order in purchase_orders:
-                        purchase_order.price = order["实付款(元)"]
-                        purchase_order.system_product.supplier_name = order["卖家公司名"]
-                        purchase_order.logistics_status = order["订单状态"]
-                        if purchase_order.posting_numbers == "[]" or not purchase_order.posting_numbers:
-                            posting_numbers = [{"value":item.strip(),"signed":"未入库"} for item in order["运单号"].split(';') if item.strip()]  
-                            purchase_order.posting_numbers = json.dumps(posting_numbers,ensure_ascii=False)
-            try:
-                db.session.commit()
-                operate_log_writer_func(operateType=OperateType.purchaseOrder, describe=f"操作人:{current_user.username}, 操作:更新订单")
-                return jsonify({
-                    "msg":"订单数据更新成功！",
-                }), 200  
-            except Exception as e:
-                return {"msg":"订单数据更新失败！"}, 400            
-        except Exception as e:
-            return jsonify({'msg': f'解析excel文件失败！: {str(e)}'}), 400
-    else:
-       return jsonify({
-                "msg":"未找到对应用户！",
-            }), 400 
-
-
 # 一键更新1688商品
 # 全局变量
 updataRunning = False
@@ -1435,7 +1520,7 @@ updataMsg = {
 @active_required
 def updatePurchaseOrdersIn1688WithAPI():
 
-    current_user = get_jwt_identity()
+    current_user = get_jwt()
     current_user = User.query.filter_by(id=current_user['id']).first()
 
     if current_user:
@@ -1443,7 +1528,7 @@ def updatePurchaseOrdersIn1688WithAPI():
         if current_user.is_admin:
             pass
         elif current_user.department and (current_user.is_department_admin or any(role.id == "2" for role in current_user.roles)):
-            query = query.filter_by(department_id = current_user.department_id)
+            pass
         else:
             return {"msg":"当前账户无操作权限！"},400
         
@@ -1492,7 +1577,7 @@ def updataDataThread(app):
             now = datetime.now()
             half_month_ago = now - timedelta(days=15)
 
-            today_str = now.replace(hour=11, minute=59, second=59, microsecond=0).strftime('%Y%m%d%H%M%S%f')[:-3] + '+0800'
+            today_str = now.replace(hour=23, minute=59, second=59, microsecond=0).strftime('%Y%m%d%H%M%S%f')[:-3] + '+0800'
             half_month_ago_str = half_month_ago.replace(hour=0, minute=0, second=0, microsecond=0).strftime('%Y%m%d%H%M%S%f')[:-3] + '+0800'
             
             # 更新订单
@@ -1501,7 +1586,6 @@ def updataDataThread(app):
             if Record:
                 totalRecord = Record["totalRecord"]
                 pages = math.ceil(int(totalRecord)/50)
-
                 updataMsg["updataProgress"]["allCount"] = totalRecord
 
                 for page in range(pages):
@@ -1515,6 +1599,11 @@ def updataDataThread(app):
                             updataMsg["updataProgress"]["nowUpdata"] += 1
 
                             purchase_id = order["baseInfo"]["id"]
+
+                            # if purchase_id == "2405394195001558276" or purchase_id == "2405806754785558276":
+                            #     print(order)
+                            #     a = input()
+                                
                             shipping_fee = order["baseInfo"]["shippingFee"]
 
                             product_items = order["productItems"]
@@ -1555,7 +1644,8 @@ def updataDataThread(app):
                                     purchase_order.shipping_fee = shipping_fee
                                     
                                     for purchase_product in purchase_order.purchase_products:
-                                        purchase_product.price = single_price
+                                        if purchase_product.status != PurchaseProductStatus.loss:
+                                            purchase_product.price = single_price
 
                                     if purchase_order.status == PurchaseStatus.waitForPay:
                                           
@@ -1565,9 +1655,24 @@ def updataDataThread(app):
                                             db.session.query(PurchaseProduct).filter(
                                                 PurchaseProduct.purchase_order_id == purchase_order.id
                                             ).delete()
+                                            refundStatus = get1688OrderDetail(purchase_order.purchase_id)["refundStatus"]
+                                            if refundStatus:
+                                                purchase_product.logistics_status = refundStatus
+
                                         elif status_str == "等待买家付款":
                                             pass
+                                        elif status_str == "等待买家收货":
+                                            purchase_order.status = PurchaseStatus.inTransit
+                                            # 全部待采购 采购产品 状态变更为 在途中
+                                            for purchase_product in purchase_order.purchase_products:
+                                                if purchase_product.status == PurchaseProductStatus.wait_purchase:
+                                                    purchase_product.status = PurchaseProductStatus.in_transit
+                                            # 更新一下物流单号
+                                            logisticsBillNos = get1688OrderDetail(purchase_order.purchase_id)["data"]
+                                            if logisticsBillNos:
+                                                purchase_order.posting_numbers = json.dumps([{"value":item,"signed":"未入库"} for item in logisticsBillNos])
                                         else:
+                                            
                                             purchase_order.status = PurchaseStatus.inTransit
                                             # 全部待采购 采购产品 状态变更为 在途中
                                             for purchase_product in purchase_order.purchase_products:
@@ -1582,6 +1687,19 @@ def updataDataThread(app):
                                             db.session.query(PurchaseProduct).filter(
                                                 PurchaseProduct.purchase_order_id == purchase_order.id
                                             ).delete()
+                                        elif status_str == "等待买家收货" or status_str == "等待买家签收":
+                                            if purchase_order.posting_numbers:
+                                                posting_number = json.loads(purchase_order.posting_numbers)
+                                                if not posting_number:
+                                                    # 更新一下物流单号
+                                                    logisticsBillNos = get1688OrderDetail(purchase_order.purchase_id)["data"]
+                                                    if logisticsBillNos:
+                                                        purchase_order.posting_numbers = json.dumps([{"value":item,"signed":"未入库"} for item in logisticsBillNos], ensure_ascii=False)
+                                            else:
+                                                # 更新一下物流单号
+                                                logisticsBillNos = get1688OrderDetail(purchase_order.purchase_id)["data"]
+                                                if logisticsBillNos:
+                                                    purchase_order.posting_numbers = json.dumps([{"value":item,"signed":"未入库"} for item in logisticsBillNos], ensure_ascii=False)
                         try:
                             db.session.commit()
                         except Exception as e:
@@ -1601,12 +1719,13 @@ def updataDataThread(app):
 
 # 一键采购同一供应商的1688商品
 # 系统管理员、部门管理员 和 采购 可操作
-@purchase_order_list.route('/buyPurchaseProductIn1688WithAPI', methods=['POST'])
+@purchase_order_list.route('/buyPurchaseProductIn1688WithAPI_flow', methods=['POST'])
 @jwt_required()
 @active_required
-def buyPurchaseProductIn1688WithAPI():
+def buyPurchaseProductIn1688WithAPI_flow():
 
-    current_user = get_jwt_identity()
+
+    current_user = get_jwt()
     current_user = User.query.filter_by(id=current_user['id']).first()
 
     if current_user:
@@ -1626,6 +1745,138 @@ def buyPurchaseProductIn1688WithAPI():
         
         # 下单的产品列表
         cargoParamList = []
+
+        purchase_order_list = []
+
+        for purchase_order_msg in purchase_order_msgs:
+
+            purchase_order_id = purchase_order_msg["id"]
+            purchase_order = PurchaseOrder.query.filter_by(id = purchase_order_id).first()
+
+            if not purchase_order:
+                return jsonify({"msg":f"无id为{purchase_order_id} 的采购单！"}),401
+
+            if not current_user.is_admin:
+                if not purchase_order.department_id == current_user.department_id:
+                    return jsonify({"msg": f"采购单{purchase_order.id} 不在当前账号部门！"}),400
+            
+            if not purchase_order.purchase_platform == "1688":
+                return jsonify({"msg": f"采购单{purchase_order.id} 不是1688平台！无法采购！"}),400
+            
+            if not  purchase_order.system_product.productId_1688:
+                return jsonify({"msg": f"采购单{purchase_order.id} 未绑定1688productId，无法采购！"}),400
+
+            if not purchase_order.status == PurchaseStatus.waitForPurchase:
+                return jsonify({"msg":f"采购订单{purchase_order.id}的状态为{purchase_order.status}，无法采购，请检查采购订单状态！"}),400
+            
+            if supplier_name:
+                if not purchase_order.system_product.supplier_name == supplier_name:
+                    return jsonify({"msg":f"采购订单对应货品供应商不一致！请检查后重试！"}),400
+            else:
+                supplier_name = purchase_order.system_product.supplier_name
+
+            purchase_products_wait_for_purchase = [item for item in purchase_order.purchase_products if item.status == PurchaseProductStatus.wait_purchase]
+            purchase_products_wait_for_purchase_numbers = len(purchase_products_wait_for_purchase)
+
+            purchase_order_list.append(purchase_order)
+
+            if purchase_order.system_product.skuId_1688 == "无":
+                cargoParamList.append(
+                    {
+                        "offerId": purchase_order.system_product.productId_1688,
+                        "quantity": str(purchase_products_wait_for_purchase_numbers)
+                    }
+                )
+            else:
+                cargoParamList.append(
+                    {
+                        "offerId": purchase_order.system_product.productId_1688,
+                        "specId": purchase_order.system_product.specId_1688,
+                        "quantity": str(purchase_products_wait_for_purchase_numbers)
+                    }
+                )
+
+        data = create1688OrderPreview(cargoParamList)
+        flow = data["data"]["orderPreviewResuslt"][0]["flowFlag"] if data["data"] else None
+        
+        if flow:
+            products = []
+            amount = 0
+            
+            for product in data["data"]["orderPreviewResuslt"][0]["cargoList"]:
+                productId_1688 = product["offerId"]
+                system_product = SystemProduct.query.filter_by(productId_1688 = productId_1688).first()
+                
+                if system_product:
+                    amount += product["amount"]
+
+                    products.append(
+                        {
+                            "id": system_product.id,
+                            "primary_image": system_product.primary_image,
+                            "system_sku": system_product.system_sku,
+                            "reference_weight": system_product.reference_weight,
+                            "reference_cost": system_product.reference_cost,
+                            "purchase_link": system_product.purchase_link,
+                            "purchase_platform": system_product.purchase_platform,
+                            "supplier_name": system_product.supplier_name,
+                            "finalUnitPrice": product["finalUnitPrice"],
+                            "amount": product["amount"],
+                            "number": float(product["amount"]) // float(product["finalUnitPrice"])
+                        }
+                    )
+            return {
+                "msg": "获取订单预览数据成功！",
+                "data": {
+                    "products":products,
+                    "flow":flow,
+                    "purchase_order_msgs":purchase_order_msgs,
+                    "amount": amount
+                }
+            },200
+            
+        else:
+            return jsonify({"msg":f"获取订单前预览数据（获取flow）失败！{data['msg']}"}),400
+            
+    else:
+        return jsonify({
+                    "msg":"未找到对应用户！",
+                }), 400 
+
+# 一键采购同一供应商的1688商品
+# 系统管理员、部门管理员 和 采购 可操作
+@purchase_order_list.route('/buyPurchaseProductIn1688WithAPI_buy', methods=['POST'])
+@jwt_required()
+@active_required
+def buyPurchaseProductIn1688WithAPI_buy():
+
+    current_user = get_jwt()
+    current_user = User.query.filter_by(id=current_user['id']).first()
+
+    if current_user:
+        if not current_user.is_admin:
+            if not (current_user.is_department_admin):
+                if not any(role.id == "2" for role in current_user.roles):
+                    return {"msg":"当前账户无操作权限！"},400
+            
+        data = request.get_json()
+
+        if "purchase_order_msgs" in data:
+            purchase_order_msgs = data['purchase_order_msgs']
+        else:
+            return jsonify({"msg":"采购单信息 不能为空！"}),401
+        
+        if "flow" in data:
+            flow = data['flow']
+        else:
+            return jsonify({"msg":"flow 不能为空！"}),401
+        
+        supplier_name = ""
+        
+        # 下单的产品列表
+        cargoParamList = []
+
+        purchase_order_list = []
 
         for purchase_order_msg in purchase_order_msgs:
 
@@ -1660,6 +1911,8 @@ def buyPurchaseProductIn1688WithAPI():
             # 更改采购订单采购状态
             purchase_order.status = PurchaseStatus.waitForPay
 
+            purchase_order_list.append(purchase_order)
+
             if purchase_order.system_product.skuId_1688 == "无":
                 cargoParamList.append(
                     {
@@ -1676,14 +1929,19 @@ def buyPurchaseProductIn1688WithAPI():
                     }
                 )
 
-        # 开始下单
-        data = create1688OrderPreview(cargoParamList)
-        flow = data["data"]["orderPreviewResuslt"][0]["flowFlag"] if data["data"] else None
-        
         if flow:
             result = create1688Order(flow,cargoParamList)
 
             if result["data"]:
+                purchase_id = result["data"]["result"]["orderId"]
+
+                for purchase_order in purchase_order_list:
+                    purchase_order.purchase_id = purchase_id
+                    purchase_order.purchaser_id = current_user.id
+                    # 新增填写运单号的时间
+                    purchase_order.fill_purchase_id_time = datetime.now()
+
+
                 db.session.commit()
                 operate_log_writer_func(operateType=OperateType.purchaseOrder, describe=f"操作人:{current_user.username}, 操作:自动下单1688订单{cargoParamList}成功！")
                 return jsonify({"msg":f"1688自动下单成功！"}),200
@@ -1693,7 +1951,87 @@ def buyPurchaseProductIn1688WithAPI():
             return jsonify({"msg":f"获取订单前预览数据（获取flow）失败！"}),400
             
     else:
-       return jsonify({
-                "msg":"未找到对应用户！",
-            }), 400 
+        return jsonify({
+                    "msg":"未找到对应用户！",
+                }), 400 
+
+@purchase_order_list.route('/updatePurchaseOrdersInPddWithData', methods=['POST'])
+# 更新pdd订单数据
+def updatePurchaseOrdersInPddWithData():
+    try:
+        data = request.get_json()
+
+        if "orders" in data:
+            orders = data['orders']
+        else:
+            return jsonify({"msg":"订单信息不能为空！"}),401
+
+
+        # 获取pdd 运输中 采购订单
+        purchase_orders_query = PurchaseOrder.query.filter_by(
+            purchase_platform="pdd"
+        ).filter(
+            or_(
+                PurchaseOrder.status == PurchaseStatus.inTransit
+            )
+        )
+        
+        for order in orders:
+
+            purchase_id = order["order_sn"]
+            status_str = order["order_status_prompt"]
+            price = float(order["order_amount"])
+            posting_numbers = order["tracking_number"]
+            extra_info = order["extra_info"]
+            goods_number = int(order["goods_number"])
+
+            purchase_order = purchase_orders_query.filter_by(purchase_id = purchase_id).first()
+
+            if not purchase_order:
+                continue
+            
+            purchase_order.price = price/100
+            purchase_order.logistics_status = extra_info
+            purchase_order.platform_status = status_str
+
+            for purchase_product in purchase_order.purchase_products:
+                if purchase_product.status != PurchaseProductStatus.loss:
+                    purchase_product.price = order["order_amount"]/goods_number
+                        
+            if (
+                status_str == "未发货，退款成功" 
+                or status_str == "已发货，退货待用户寄出" 
+                or status_str == "交易已取消" 
+                or status_str == "已发货，退款成功" 
+                or status_str == "退货退款，待取件" 
+                or status_str == "已签收，退货待用户寄出" 
+                or status_str == "已签收，退款成功" 
+            ):
+                purchase_order.status = PurchaseStatus.cancelled
+                # 删掉关联的采购商品
+                db.session.query(PurchaseProduct).filter(
+                    PurchaseProduct.purchase_order_id == purchase_order.id
+                ).delete()
+            elif status_str == "待收货":
+                if purchase_order.posting_numbers:
+                    posting_number = json.loads(purchase_order.posting_numbers)
+                    if not posting_number:
+                        # 更新一下物流单号
+                        if posting_numbers:
+                            purchase_order.posting_numbers = json.dumps([{"value":item["tracking_number"],"signed":"未入库"} for item in posting_numbers], ensure_ascii=False)
+                else:
+                    # 更新一下物流单号
+                    if posting_numbers:
+                        purchase_order.posting_numbers = json.dumps([{"value":item["tracking_number"],"signed":"未入库"} for item in posting_numbers], ensure_ascii=False)
+        try:
+            db.session.commit()
+        except Exception as e:
+            operate_log_writer_func(operateType=OperateType.purchaseOrder,describe=f"更新pdd订单失败!,错误信息”：{e}",isSystem=True)
+            return jsonify({"msg":f"更新pdd订单失败!,错误信息”：{e}"}),400
+            
+        return jsonify({"msg":f'更新pdd订单成功！本次更新数据{orders}'}),200
     
+    except Exception as e:
+        stack_trace = traceback.format_exc()
+        operate_log_writer_func(operateType=OperateType.purchaseOrder,describe=f"更新pdd订单失败!,错误信息”：{stack_trace}",isSystem=True)
+        return jsonify({"msg":f"更新pdd订单失败!,错误信息”：{stack_trace}"}),400

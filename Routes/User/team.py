@@ -7,7 +7,7 @@ description: 刀具CRUD接口
 from flask import Blueprint,jsonify,request
 from Models import db
 import uuid
-from flask_jwt_extended import jwt_required,get_jwt_identity
+from flask_jwt_extended import jwt_required,get_jwt
 from sqlalchemy import or_
 
 
@@ -48,7 +48,7 @@ def initAdminAccount():
 @jwt_required()
 @active_required
 def getData():
-    current_user = get_jwt_identity()
+    current_user = get_jwt()
     user = User.query.filter_by(id=current_user['id']).first()
     
     start = int(request.args.get('start', 0))
@@ -98,7 +98,7 @@ def getData():
 @jwt_required()
 @active_required
 def getDataFromDepartment():
-    current_user = get_jwt_identity()
+    current_user = get_jwt()
     user = User.query.filter_by(id=current_user['id']).first()
 
     data = request.get_json()
@@ -139,7 +139,7 @@ def getDataFromDepartment():
 @jwt_required()
 @active_required
 def addData():
-    current_user = get_jwt_identity()
+    current_user = get_jwt()
     user = User.query.filter_by(id=current_user['id']).first()
 
     data = request.get_json()
@@ -183,7 +183,7 @@ def addData():
 @jwt_required()
 @active_required
 def modifyData(): 
-    current_user = get_jwt_identity()
+    current_user = get_jwt()
     user = User.query.filter_by(id=current_user['id']).first()
     data = request.get_json()
 
@@ -247,7 +247,7 @@ def modifyData():
 @jwt_required()
 @active_required
 def deleteData():
-    current_user = get_jwt_identity()
+    current_user = get_jwt()
     user = User.query.filter_by(id=current_user['id']).first()
     data = request.get_json()
 

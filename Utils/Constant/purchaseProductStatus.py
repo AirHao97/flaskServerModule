@@ -7,3 +7,4 @@ class PurchaseProductStatus:
     in_basket = "在篮"
     in_stock = "在库"
     out_stock = "出库"
+    wait_for_back = "待退货"

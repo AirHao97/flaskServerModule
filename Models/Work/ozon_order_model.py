@@ -50,10 +50,16 @@ class OzonOrder(db.Model):
     currency_code = db.Column(db.Text, doc='价格货币')
     
     # 自定义字段
+    audit_in_system = db.Column(db.Boolean, default=False, doc='订单审核是否在系统中进行')
+    is_over_weight = db.Column(db.Boolean, default=False, doc='打包检查是否超重')
+    weight = db.Column(db.Text, doc='打包称重重量')
+    over_weight_record = db.Column(db.Text, doc='超重数据记录')
     total_price = db.Column(db.Text, doc='订单总价')
     system_status = db.Column(db.Text, doc='系统中状态')
     approval_time = db.Column(db.DateTime, doc='通过运营审核时间')
     dispatch_time = db.Column(db.DateTime, doc='出库时间')
+
+    posting_number_pdf = db.Column(db.Text, doc='面单pdf')
 
     # 关联ozon产品
     ozon_products_msg = db.relationship('OzonOrderOzonProduct', backref='ozon_order')

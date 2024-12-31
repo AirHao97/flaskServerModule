@@ -1,5 +1,5 @@
 from functools import wraps
-from flask_jwt_extended import get_jwt_identity
+from flask_jwt_extended import get_jwt
 from flask import jsonify,request
 
 from Models.User.user_model import User
@@ -11,7 +11,7 @@ def has_role(user, role_id):
 def active_required(fn):
     @wraps(fn)
     def wrapper(*args, **kwargs):
-        current_user = get_jwt_identity()
+        current_user = get_jwt()
         user = User.query.filter_by(id=current_user['id']).first()
         if user and user.is_active:
             return fn(*args, **kwargs)
@@ -23,7 +23,7 @@ def active_required(fn):
 def admin_required(fn):
     @wraps(fn)
     def wrapper(*args, **kwargs):
-        current_user = get_jwt_identity()
+        current_user = get_jwt()
         user = User.query.filter_by(id=current_user['id']).first()
         if user and user.is_admin:
             return fn(*args, **kwargs)
@@ -35,7 +35,7 @@ def admin_required(fn):
 def admin_all_required(fn):
     @wraps(fn)
     def wrapper(*args, **kwargs):
-        current_user = get_jwt_identity()
+        current_user = get_jwt()
         data = request.get_json()
         user_id = data['user_id']
 
@@ -61,7 +61,7 @@ def admin_all_required(fn):
 def operations_required(fn):
     @wraps(fn)
     def wrapper(*args, **kwargs):
-        current_user = get_jwt_identity()
+        current_user = get_jwt()
         user = User.query.filter_by(id=current_user['id']).first()
         if user and (user.is_admin or has_role(user,"1")):
             return fn(*args, **kwargs)
@@ -73,7 +73,7 @@ def operations_required(fn):
 def purchasing_required(fn):
     @wraps(fn)
     def wrapper(*args, **kwargs):
-        current_user = get_jwt_identity()
+        current_user = get_jwt()
         user = User.query.filter_by(id=current_user['id']).first()
         if user and (user.is_admin or has_role(user,"2")):
             return fn(*args, **kwargs)
@@ -85,7 +85,7 @@ def purchasing_required(fn):
 def packaging_required(fn):
     @wraps(fn)
     def wrapper(*args, **kwargs):
-        current_user = get_jwt_identity()
+        current_user = get_jwt()
         user = User.query.filter_by(id=current_user['id']).first()
         if user and (user.is_admin or has_role(user,"3")):
             return fn(*args, **kwargs)
@@ -97,7 +97,7 @@ def packaging_required(fn):
 def finance_required(fn):
     @wraps(fn)
     def wrapper(*args, **kwargs):
-        current_user = get_jwt_identity()
+        current_user = get_jwt()
         user = User.query.filter_by(id=current_user['id']).first()
         if user and (user.is_admin or has_role(user,"4")):
             return fn(*args, **kwargs)

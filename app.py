@@ -3,7 +3,7 @@ author:AHAO
 createTime:2024/05/30 9:59
 description: 入口文件 配置实例
 '''
-from flask import Flask
+from flask import Flask,render_template
 from flask_cors import CORS
 from flask_jwt_extended import JWTManager
 from flask_migrate import Migrate
@@ -16,7 +16,12 @@ from Models import db
 from Utils import addBluePrint
 
 def create_app():
-    app = Flask(__name__)
+    app = Flask(__name__,
+        static_folder='./templates',
+        template_folder = "./templates",
+        static_url_path="/"
+    )
+
 
     # 跨域配置
     CORS(app, supports_credentials=True)
@@ -33,6 +38,12 @@ def create_app():
     
     # 数据库迁移配置
     Migrate(app, db)
+
+    # 前端界面
+    @app.route('/')
+    def index():
+        # 渲染Vue.js的HTML页面
+        return render_template('index.html')
 
     # 注册路由(在Model中注册的表单类必须在Routes中被import了至少一次 migrations才会生成对应的表单)
     routes = addBluePrint.add_blueprint("Routes")

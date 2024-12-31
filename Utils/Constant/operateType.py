@@ -10,3 +10,4 @@ class OperateType:
     systemProduct = "系统内产品数据"
     user = "系统账号"
     team = "运营小组"
+    package = "麻袋"

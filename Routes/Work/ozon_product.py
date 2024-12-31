@@ -6,7 +6,7 @@ description: 刀具CRUD接口
 from flask import Blueprint,jsonify,request,current_app
 from Models import db
 import uuid
-from flask_jwt_extended import jwt_required,get_jwt_identity
+from flask_jwt_extended import jwt_required,get_jwt
 from sqlalchemy import or_
 import traceback
 import threading
@@ -24,6 +24,7 @@ from Models.Work.system_product_model import SystemProduct
 from Models.Work.ozon_product_model import OzonProduct 
 from Models.Work.ozon_product_model import OzonProductSystemProduct 
 from Models.User.user_model import User
+from Models.Work.shop_model import Shop
 
 ozon_product_list = Blueprint('ozon_product', __name__, url_prefix='/ozon_product')
 
@@ -158,7 +159,7 @@ def getProgress():
 @jwt_required()
 @active_required
 def getData():
-    current_user = get_jwt_identity()
+    current_user = get_jwt()
     user = User.query.filter_by(id=current_user['id']).first()
     if user:
         start = int(request.args.get('start', 0))
@@ -166,9 +167,18 @@ def getData():
         keyWord = str(request.args.get('keyWord', None))
 
         if keyWord:
-            columns = [column.name for column in OzonProduct.__table__.columns ]
-            filters = [getattr(OzonProduct, col).like(f'%{keyWord}%') for col in columns]
-            query = OzonProduct.query.filter(or_(*filters))
+            product_columns = [column.name for column in OzonProduct.__table__.columns ]
+            product_filters = [getattr(OzonProduct, col).like(f'%{keyWord}%') for col in product_columns]
+            shop_columns = [column.name for column in Shop.__table__.columns]
+            shop_filters = [getattr(Shop, col).like(f'%{keyWord}%') for col in shop_columns]
+
+            filters = or_(*product_filters, *shop_filters)
+
+            query = (
+                OzonProduct.query
+                .outerjoin(Shop, Shop.id == OzonProduct.shop_id)
+                .filter(filters)
+            )
         else:
             query = OzonProduct.query
 
@@ -290,7 +300,7 @@ def getData():
 @jwt_required()
 @active_required
 def bindSystemProducts():
-    current_user = get_jwt_identity()
+    current_user = get_jwt()
     user = User.query.filter_by(id=current_user['id']).first()
     
     if not user:

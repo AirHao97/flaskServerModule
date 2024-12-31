@@ -7,7 +7,7 @@ description: 刀具CRUD接口
 from flask import Blueprint,jsonify,request
 from Models import db
 import uuid
-from flask_jwt_extended import jwt_required,get_jwt_identity
+from flask_jwt_extended import jwt_required,get_jwt
 from sqlalchemy import or_
 
 
@@ -66,7 +66,7 @@ def getData():
     limit = int(request.args.get('limit', 10))
     keyWord = str(request.args.get('keyWord', None))
 
-    current_user = get_jwt_identity()
+    current_user = get_jwt()
     user = User.query.filter_by(id=current_user['id']).first()
 
     if keyWord:
@@ -115,7 +115,7 @@ def addData():
 @active_required
 def modifyData():
 
-    current_user = get_jwt_identity() 
+    current_user = get_jwt() 
     user = User.query.filter_by(id=current_user['id']).first()
 
     if not user:
