@@ -268,9 +268,9 @@ def updataDataThread(app,upDateDays):
 
                             try:
                                 if modify_context_purchase_order:
-                                    operate_log_writer_func(operateType=OperateType.purchaseOrder,describe=modify_context_purchase_order,isSystem=True)
+                                    operate_log_writer_func(operateType=OperateType.purchaseOrder,describe=json.loads(modify_context_purchase_order),isSystem=True)
                                 if modify_context_purchase_product:
-                                    operate_log_writer_func(operateType=OperateType.purchaseProduct,describe=modify_context_purchase_product,isSystem=True)
+                                    operate_log_writer_func(operateType=OperateType.purchaseProduct,describe=json.loads(modify_context_purchase_product),isSystem=True)
                                 db.session.add_all(addList_order)
                                 db.session.add_all(addList_product)
                                 db.session.add_all(addList_relation)
@@ -639,6 +639,9 @@ def getData():
                 "owner": {"id":result.shop.owner.id, "name":result.shop.owner.username} if result.shop.owner else None,
                 "create_time": result.create_time,
                 "modify_time": result.modify_time,
+
+                "sum_weight":sum([ round(float(system_product_msg.system_product.reference_weight) * int(system_product_msg.quantity) * int(ozon_product_msg.quantity),2) for ozon_product_msg in result.ozon_products_msg for system_product_msg in ozon_product_msg.ozon_product.system_products_msg]),
+                "sum_cost":sum([ round(float(system_product_msg.system_product.reference_cost) * int(system_product_msg.quantity) * int(ozon_product_msg.quantity),2) for ozon_product_msg in result.ozon_products_msg for system_product_msg in ozon_product_msg.ozon_product.system_products_msg]),
 
                 "audit_in_system": result.audit_in_system,
                 "is_over_weight": result.is_over_weight,
@@ -1173,17 +1176,19 @@ def auditOrderWithPostingNumbers():
 
     data = request.get_json()
 
-    if "posting_number" in data:
-        posting_number = data['posting_number']
+    if "posting_numbers" in data:
+        posting_numbers = data['posting_numbers']
     else:
-        return jsonify({"msg":"posting_number 不能为空！"}),401
+        return jsonify({"msg":"posting_numbers 不能为空！"}),401
     
-    order = OzonOrder.query.filter_by(posting_number=posting_number).first()
+    for posting_number in posting_numbers:
+    
+        order = OzonOrder.query.filter_by(posting_number=posting_number).first()
 
-    if not order:
-        return {"msg":"找不到当前订单！"},401
+        if not order:
+            return {"msg":"找不到当前订单！"},401
 
-    if user:
+
         if (
             # 系统管理员
             user.is_admin
@@ -1196,13 +1201,21 @@ def auditOrderWithPostingNumbers():
             # 用户属于订单的拥有者的订单关联伙伴
             or (any(user.id == partner_orders.id for partner_orders in order.shop.owner.partners_orders))
         ):
-            
-            # 订单 拆分/直接 申请运单号
-            if "packages" in data:
-                packages = data['packages']
-            else:
-                return {"msg":"packages 不能为空！"},401
-            
+            packages = []
+
+            for ozon_product_msg in order.ozon_products_msg:
+                quantity = ozon_product_msg.quantity
+                product = ozon_product_msg.ozon_product
+
+                packages.append({
+                    "product_id": product.sku,
+                    "quantity": quantity
+                })
+
+            packages = [
+                {"products":packages}
+            ]
+
             result = orderShip(
                 api_id = order.shop.api_id, 
                 api_key = order.shop.api_key, 
@@ -1279,22 +1292,201 @@ def auditOrderWithPostingNumbers():
                     db.session.add_all(addList_order)
                     db.session.add_all(addList_relation)
                     db.session.commit()
-                    operate_log_writer_func(operateType=OperateType.ozonOrder, describe=f"操作人:{user.username}, 操作:审核订单, id:{order.id}")
-                    return {"msg":"订单审核成功！"}, 200  
+                    operate_log_writer_func(operateType=OperateType.ozonOrder, describe=f"操作人:{user.username}, 操作:审核订单, id:{order.id}, 审核成功！")
                 except Exception as e:
-                    print(e)
-                    return {"msg":"审核后订单数据存储失败！"}, 400
+                    operate_log_writer_func(operateType=OperateType.ozonOrder, describe=f"操作人:{user.username}, 操作:审核订单, id:{order.id}，审核后订单数据存储失败！ {e}")
             else:
-                return {"msg":"订单审核失败！"}, 400                
+                operate_log_writer_func(operateType=OperateType.ozonOrder, describe=f"操作人:{user.username}, 操作:审核订单, id:{order.id}，审核失败！ {result}")
         else:
-            return jsonify({
-                "msg":"无该订单审核权限！",
-            }), 400 
-    else:
-       return jsonify({
-                "msg":"未找到对应用户！",
-            }), 401
+            operate_log_writer_func(operateType=OperateType.ozonOrder, describe=f"操作人:{user.username}, 操作:审核订单, id:{order.id}，审核失败！ 无该订单审核权限！") 
     
+    return {"msg":"订单审核完成!"},200
+
+# 单产品订单一键审核（申请运单号）
+# 系统管理员、部门管理员、小组管理员 和 运营可操作
+# 系统管理员可审核全部订单
+# 部门管理员可以审核本部门订单
+# 小组管理员可以审核本小组订单
+# 运营可以审核自己的店铺下的订单
+@ozon_order_list.route('/auditOrdersWithSingleProduct', methods=['POST'])
+@jwt_required()
+@active_required
+def auditOrdersWithSingleProduct():
+    current_user = get_jwt()
+    user = User.query.filter_by(id=current_user['id']).first()
+
+    query = OzonOrder.query
+
+    if user.is_admin:
+        results = query.all()
+        count = query.count()
+    elif user.is_department_admin and user.department:
+        shop_ids = []
+        users = User.query.filter_by(department_id = user.department_id).all()
+        # 本部门
+        for i in users:
+            for j in i.owner_shops:
+                shop_ids.append(j.id)
+        # 自己关联的
+        for i in user.partner_orders_of:
+            for j in i.owner_shops:
+                shop_ids.append(j.id)
+
+        query = query.filter(OzonOrder.shop_id.in_(shop_ids))
+        results = query.all()
+        count = query.count()
+
+    elif user.is_team_admin and user.team:
+        shop_ids = []
+        users = User.query.filter_by(team_id = user.team_id).all()
+        # 本小组的
+        for i in users:
+            for j in i.owner_shops:
+                shop_ids.append(j.id)
+        # 自己关联的
+        for i in user.partner_orders_of:
+            for j in i.owner_shops:
+                shop_ids.append(j.id)
+
+        query = query.filter(OzonOrder.shop_id.in_(shop_ids))
+        results = query.all()
+        count = query.count()
+    else:
+        if not any(role.id == "1" for role in user.roles):
+            return {"msg":"当前账户无操作权限！"},400
+        
+        # 自己店铺下的id
+        shop_ids = [item.id for item in user.owner_shops]
+        # 可处理订单的关系伙伴下的店铺id
+        for i in user.partner_orders_of:
+            for j in i.owner_shops:
+                shop_ids.append(j.id)
+        query = query.filter(OzonOrder.shop_id.in_(shop_ids))
+        results = query.all()
+        count = query.count()
+
+
+    posting_numbers = [item.posting_number for item in results if len(item.ozon_products_msg) == 1 and item.ozon_products_msg[0].quantity == 1]
+    for posting_number in posting_numbers:
+    
+        order = OzonOrder.query.filter_by(posting_number=posting_number).first()
+
+        if not order:
+            return {"msg":"找不到当前订单！"},401
+
+        if (
+            # 系统管理员
+            user.is_admin
+            # 部门管理员 
+            or (user.is_department_admin and user.department and order.shop.owner.department_id == user.department_id)
+            # 小组管理员
+            or (user.is_team_admin and user.team and order.shop.owner.team_id == user.team_id)
+            # 单子属于运营自己
+            or (any(role.id == "1" for role in user.roles) and user.id == order.shop.owner.id)
+            # 用户属于订单的拥有者的订单关联伙伴
+            or (any(user.id == partner_orders.id for partner_orders in order.shop.owner.partners_orders))
+        ):
+            packages = []
+
+            for ozon_product_msg in order.ozon_products_msg:
+                quantity = ozon_product_msg.quantity
+                product = ozon_product_msg.ozon_product
+
+                packages.append({
+                    "product_id": product.sku,
+                    "quantity": quantity
+                })
+
+            packages = [
+                {"products":packages}
+            ]
+
+            result = orderShip(
+                api_id = order.shop.api_id, 
+                api_key = order.shop.api_key, 
+                posting_number = posting_number,
+                packages = packages
+            )
+
+            
+            # 新增的关系数据
+            addList_relation = []
+            addList_order = []
+
+            if result["code"] == 200:
+                order.system_status = SystemStatus.waitForOzon
+                order.approval_time = datetime.now()
+                order.audit_in_system = True
+
+
+                # 未拆分
+                if (len(result["data"]["result"]) == 1):
+                    pass
+                # 拆分 
+                # 新建拆分后的子订单和产品
+                else:
+                    for item in result["data"]["additional_data"]:
+                        # 主订单号
+                        if item["posting_number"] == order.posting_number:
+                            # 更新原订单和产品的关系
+                            total_price = Decimal(0.0)
+                            itemRelationList = []
+                            for itemProduct in item["products"]:
+
+                                total_price = total_price + Decimal(itemProduct["price"]) * Decimal(itemProduct["quantity"])
+                                ozon_product = OzonProduct.query.filter_by(sku=itemProduct["sku"]).first()                                
+                                itemRelation = OzonOrderOzonProduct.query.filter_by(order_id=order.id, product_id=ozon_product.id).first()
+                                itemRelation.quantity = itemProduct["quantity"]
+                                itemRelation.price  = itemProduct["price"]
+                                itemRelationList.append(itemRelation)
+                            
+                            # 删除多余的连接关系
+                            relations = OzonOrderOzonProduct.query.filter_by(order_id=order.id).all()                            
+                            itemRelationList_id = [item.id for item in itemRelationList]
+                            to_delete_relations = [item for item in relations if item.id not in itemRelationList_id]
+                            for relation in to_delete_relations:
+                                db.session.delete(relation)
+
+                            order.total_price = float(total_price)
+
+                        else:
+                            ozon_order = OzonOrder()
+                            ozon_order.id = str(uuid.uuid1())
+                            ozon_order.posting_number = item["posting_number"]
+                            ozon_order.system_status = SystemStatus.waitForOzon
+                            ozon_order.approval_time = datetime.now()
+                            ozon_order.audit_in_system = True
+                            addList_order.append(ozon_order)
+                        
+                            total_price = Decimal(0.0)
+
+                            for itemProduct in item["products"]:
+                                total_price = total_price + Decimal(itemProduct["price"]) * Decimal(itemProduct["quantity"])
+                                ozon_product = OzonProduct.query.filter_by(sku=itemProduct["sku"]).first()
+                                itemRelation = OzonOrderOzonProduct()
+
+                                itemRelation.order_id = ozon_order.id
+                                itemRelation.product_id = ozon_product.id
+                                itemRelation.quantity = itemProduct["quantity"]
+                                itemRelation.price = itemProduct["price"]
+
+                                addList_relation.append(itemRelation)
+
+                            order.total_price = float(total_price)
+                try:
+                    db.session.add_all(addList_order)
+                    db.session.add_all(addList_relation)
+                    db.session.commit()
+                    operate_log_writer_func(operateType=OperateType.ozonOrder, describe=f"操作人:{user.username}, 操作:审核订单, id:{order.id}, 审核成功！")
+                except Exception as e:
+                    operate_log_writer_func(operateType=OperateType.ozonOrder, describe=f"操作人:{user.username}, 操作:审核订单, id:{order.id}，审核后订单数据存储失败！ {e}")
+            else:
+                operate_log_writer_func(operateType=OperateType.ozonOrder, describe=f"操作人:{user.username}, 操作:审核订单, id:{order.id}，审核失败！ {result}")
+        else:
+            operate_log_writer_func(operateType=OperateType.ozonOrder, describe=f"操作人:{user.username}, 操作:审核订单, id:{order.id}，审核失败！ 无该订单审核权限！") 
+    
+    return {"msg":"订单审核完成!"},200
+
 # 订单冻结
 # 系统管理员、部门管理员、小组管理员 和 运营可操作
 # 系统管理员可冻结全部订单
@@ -1578,11 +1770,19 @@ def getStockPreparedPendingOutwardOzonOrderData():
         start = int(request.args.get('start', 0))
         limit = int(request.args.get('limit', 10))
         keyWord = str(request.args.get('keyWord', None))
+        order_way = request.args.get('order_way', None)
 
         if keyWord:
             columns = [column.name for column in OzonOrder.__table__.columns ]
             filters = [getattr(OzonOrder, col).like(f'%{keyWord}%') for col in columns]
             query = query.filter(or_(*filters))
+
+        if order_way:
+            if order_way == "顺序":
+                query = query.order_by(OzonOrder.in_process_at.asc())
+            elif order_way == "逆序":
+                query = query.order_by(OzonOrder.in_process_at.desc())
+
 
         query = query.filter(OzonOrder.system_status==SystemStatus.stockPreparedPendingOutward)
         # query = query.filter_by(system_status=SystemStatus.reviewedPendingStock)
@@ -2983,16 +3183,22 @@ def getOzonOrdersOutDataToExcel():
     current_user = get_jwt()
     current_user = User.query.filter_by(id=current_user['id']).first()
 
-    print_date = request.args.get('print_date', '')
+    dateRange = request.args.get('dateRange', '')
 
-    if print_date:
-        try:
-            target_date = datetime.strptime(print_date, '%Y-%m-%d')
-        except ValueError as ve:
-            return jsonify({"msg":f"{print_date} 不是有效的时间格式！"}),400
+    if dateRange:
+        dateRange_ = json.loads(dateRange)
+        start_time = datetime.fromisoformat(dateRange_[0])
+        end_time = datetime.fromisoformat(dateRange_[1])
+
     else:
         return jsonify({"msg":"打印日期 不能为空！"}),401
+    
+    selectedPlatforms = request.args.get('selectedPlatforms', '')
 
+    if selectedPlatforms:
+        selectedPlatforms = json.loads(selectedPlatforms)
+    else:
+        return jsonify({"msg":"选择平台 不能为空！"}),401
 
     if current_user:
      
@@ -3002,14 +3208,11 @@ def getOzonOrdersOutDataToExcel():
             pass
         else:
             return {"msg":"当前账户无操作权限！"},400
-        
-        start_datetime = target_date
-        end_datetime = target_date + timedelta(days=1)
-        
 
         orders = OzonOrder.query.filter_by(system_status=SystemStatus.outwardShippedPendingDispatch).filter(
-            OzonOrder.dispatch_time >= start_datetime,
-            OzonOrder.dispatch_time < end_datetime
+            OzonOrder.dispatch_time >= start_time,
+            OzonOrder.dispatch_time < end_time,
+            OzonOrder.delivery_tpl_provider_name.in_(selectedPlatforms)
         ).all()
 
         data = [{"国际运单号": order.tracking_number, "重量":order.weight} for order in orders]
@@ -3025,7 +3228,7 @@ def getOzonOrdersOutDataToExcel():
         output.seek(0)
         
         # 定义下载的文件名
-        filename = f"ozon订单_{print_date}_出库订单信息.xlsx"
+        filename = f"ozon订单_{dateRange}_出库订单信息.xlsx"
 
         # 将流作为文件返回给前端
         response = make_response(send_file(

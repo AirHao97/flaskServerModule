@@ -207,9 +207,9 @@ def modifyData():
     try:
         db.session.commit()
         operate_log_writer_func(operateType=OperateType.purchaseProduct,describe=f"操作人:{current_user.username}, 操作:修改信息 id:{purchase_product.id}, 修改内容：{modifyContext}")
-        return {"msg":"采购订单信息修改成功！"}, 200  
+        return {"msg":"采购产品信息修改成功！"}, 200  
     except Exception as e:
-        return {"msg":"采购订单信息修改失败！"}, 400
+        return {"msg":"采购产品信息修改失败！"}, 400
     
 # 采购产品出库
 # 系统管理员、部门管理员 和 打包 可操作
@@ -264,6 +264,7 @@ def getDataInStockHistrory():
         start = int(request.args.get('start', 0))
         limit = int(request.args.get('limit', 10))
         keyWord = str(request.args.get('keyWord', None))
+        order_way = request.args.get('order_way', None)
 
         if keyWord:
             columns = [column.name for column in PurchaseProduct.__table__.columns ]
@@ -289,10 +290,16 @@ def getDataInStockHistrory():
             query = query.join(User,User.id == PurchaseProduct.stock_in_id).filter(User.id == current_user.id)
         else:
             return {"msg":"当前账户无操作权限！"},400
+        
+        if order_way:
+            if order_way == "顺序":
+                query = query.order_by(PurchaseProduct.stock_in_date.asc())
+            elif order_way == "逆序":
+                query = query.order_by(PurchaseProduct.stock_in_date.desc())
 
 
-        results = query.order_by(PurchaseProduct.stock_in_date.desc()).offset(start).limit(limit).all()
-        count = query.order_by(PurchaseProduct.create_time).count()
+        results = query.offset(start).limit(limit).all()
+        count = query.count()
             
         results = {
             "data" :[
@@ -318,6 +325,7 @@ def getDataInStockHistrory():
                 "create_time": result.create_time,
                 "modify_time": result.modify_time,
 
+                "posting_number": result.ozon_order.posting_number
 
             } 
             for result in results],
@@ -346,6 +354,7 @@ def getDataOutStockHistrory():
         start = int(request.args.get('start', 0))
         limit = int(request.args.get('limit', 10))
         keyWord = str(request.args.get('keyWord', None))
+        order_way = request.args.get('order_way', None)
 
         if keyWord:
             columns = [column.name for column in PurchaseProduct.__table__.columns ]
@@ -364,10 +373,16 @@ def getDataOutStockHistrory():
             query = query.join(User,User.id == PurchaseProduct.stock_out_id).filter(User.id == current_user.id)
         else:
             return {"msg":"当前账户无操作权限！"},400
+        
+        if order_way:
+            if order_way == "顺序":
+                query = query.order_by(PurchaseProduct.stock_out_date.asc())
+            elif order_way == "逆序":
+                query = query.order_by(PurchaseProduct.stock_out_date.desc())
 
 
-        results = query.order_by(PurchaseProduct.stock_out_date.desc()).offset(start).limit(limit).all()
-        count = query.order_by(PurchaseProduct.create_time).count()
+        results = query.offset(start).limit(limit).all()
+        count = query.count()
             
         results = {
             "data" :[
@@ -393,6 +408,7 @@ def getDataOutStockHistrory():
                 "create_time": result.create_time,
                 "modify_time": result.modify_time,
 
+                "posting_number": result.ozon_order.posting_number
 
             } 
             for result in results],

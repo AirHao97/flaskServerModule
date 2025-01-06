@@ -38,9 +38,22 @@ def getData():
         keyWord = str(request.args.get('keyWord', None))
 
         if keyWord:
-            columns = [column.name for column in SystemProduct.__table__.columns ]
-            filters = [getattr(SystemProduct, col).like(f'%{keyWord}%') for col in columns]
-            query = SystemProduct.query.filter(or_(*filters))
+            system_product_columns = [column.name for column in SystemProduct.__table__.columns ]
+            system_product_filters = [getattr(SystemProduct, col).like(f'%{keyWord}%') for col in system_product_columns]
+            
+            user_columns = [column.name for column in User.__table__.columns ]
+            user_filters = [getattr(User, col).like(f'%{keyWord}%') for col in user_columns]
+
+
+            # 联合查询条件
+            filters = or_(*system_product_filters, *user_filters)
+
+            query = (
+                SystemProduct.query
+                .outerjoin(User, SystemProduct.creator_id == User.id)
+                .filter(filters)
+            )
+
         else:
             query = SystemProduct.query
 
@@ -172,7 +185,7 @@ def addData():
         return {"msg":"参考价格不能为空！"},400
     
     if "purchase_link" in data:
-        modifyContext.append(f"采购链接:({data['purchase_link']})")
+        pass
     else:
         return {"msg":"采购链接不能为空！"},400
     
@@ -219,6 +232,7 @@ def addData():
     system_products = []
 
     father_id = str(uuid.uuid1())
+
     for system_sku in system_skus:
         system_product = SystemProduct()
         system_products.append(system_product)
@@ -231,7 +245,6 @@ def addData():
         system_product.primary_image = data['primary_image']
         system_product.reference_weight = data['reference_weight']
         system_product.reference_cost = data['reference_cost']
-        system_product.purchase_link = data['purchase_link']
 
         if supplier_name:
             system_product.supplier_name = supplier_name
@@ -244,6 +257,23 @@ def addData():
 
         system_product.purchase_platform = data['purchase_platform']
         system_product.department_id = current_user.department_id
+
+        # 拼接采购链接
+        purchase_links = json.loads(data['purchase_link'])
+        
+        for purchase_link in purchase_links:
+            purchase_link["purchase_platform"] = system_product.purchase_platform
+            purchase_link["supplier_name"] = system_product.supplier_name
+            purchase_link["productId_1688"] = system_product.productId_1688
+            purchase_link["specId_1688"] = system_product.specId_1688
+            purchase_link["skuId_1688"] = system_product.skuId_1688
+            purchase_link["reference_weight"] = system_product.reference_weight
+            purchase_link["reference_cost"] = system_product.reference_cost
+            purchase_link["primary_image"] = system_product.primary_image
+
+        system_product.purchase_link = json.dumps(purchase_links,ensure_ascii=False)
+
+        modifyContext.append(f"采购链接:({system_product.purchase_link})")
         
     try:
         db.session.add_all(system_products)
@@ -253,7 +283,7 @@ def addData():
     except Exception as e:
         return {"msg":"系统内商品新建失败！"}, 400
 
-# 新增数据
+# 1688 解析新增数据
 # 系统管理员、部门管理员、小组管理员 和 运营可操作
 @system_product_list.route('/addDataWith1688Data', methods=['POST'])
 @jwt_required()
@@ -283,7 +313,7 @@ def addDataWith1688Data():
         return {"msg":"参考价格不能为空！"},400
     
     if "purchase_link" in data:
-        modifyContext.append(f"采购链接:({data['purchase_link']})")
+        pass
     else:
         return {"msg":"采购链接不能为空！"},400
     
@@ -330,7 +360,6 @@ def addDataWith1688Data():
         system_product.primary_image = product["imageUrl"]
         system_product.reference_weight = data['reference_weight']
         system_product.reference_cost = data['reference_cost']
-        system_product.purchase_link = data['purchase_link']
 
 
         system_product.supplier_name = data['supplier_name']
@@ -340,6 +369,23 @@ def addDataWith1688Data():
 
         system_product.purchase_platform = data['purchase_platform']
         system_product.department_id = current_user.department_id
+
+        # 拼接采购链接
+        purchase_links = json.loads(data['purchase_link'])
+        
+        for purchase_link in purchase_links:
+            purchase_link["purchase_platform"] = system_product.purchase_platform
+            purchase_link["supplier_name"] = system_product.supplier_name
+            purchase_link["productId_1688"] = system_product.productId_1688
+            purchase_link["specId_1688"] = system_product.specId_1688
+            purchase_link["skuId_1688"] = system_product.skuId_1688
+            purchase_link["reference_weight"] = system_product.reference_weight
+            purchase_link["reference_cost"] = system_product.reference_cost
+            purchase_link["primary_image"] = system_product.primary_image
+
+        system_product.purchase_link = json.dumps(purchase_links,ensure_ascii=False)
+
+        modifyContext.append(f"采购链接:({system_product.purchase_link})")
         
     try:
         db.session.add_all(system_products)
@@ -455,9 +501,6 @@ def modifyData():
                     word += f"{item.supplier_name} -> {data['supplier_name']}"
                     item.supplier_name = data["supplier_name"]
 
-                    word += f"{item.purchase_link} -> {data['purchase_link']}"
-                    item.purchase_link = data["purchase_link"]
-
                     modifyContext.append(word)
 
         if "is_all_pic" in data:
@@ -475,6 +518,24 @@ def modifyData():
                     item.primary_image = data["primary_image"]
 
                     modifyContext.append(word)
+        
+        # 拼接采购链接
+        purchase_links = json.loads(data['purchase_link'])
+        
+        purchase_link = purchase_links[0]
+
+        purchase_link["purchase_platform"] = system_product.purchase_platform
+        purchase_link["supplier_name"] = system_product.supplier_name
+        purchase_link["productId_1688"] = system_product.productId_1688
+        purchase_link["specId_1688"] = system_product.specId_1688
+        purchase_link["skuId_1688"] = system_product.skuId_1688
+        purchase_link["reference_weight"] = system_product.reference_weight
+        purchase_link["reference_cost"] = system_product.reference_cost
+        purchase_link["primary_image"] = system_product.primary_image
+
+        system_product.purchase_link = json.dumps(purchase_links,ensure_ascii=False)
+
+        modifyContext.append(f"采购链接:({system_product.purchase_link})")
 
         try:
             db.session.commit()
@@ -484,6 +545,32 @@ def modifyData():
             return {"msg":"系统内商品信息修改失败！"}, 400
     else:
         return {"msg":"当前账户无操作权限！"},400 
+
+
+# 临时使用 修改link数据
+@system_product_list.route('/controlData', methods=['POST'])
+@jwt_required()
+@active_required
+def controlData():
+    system_products = SystemProduct.query.all()
+
+    for system_product in system_products:
+        purchase_links = json.loads(system_product.purchase_link)
+        for purchase_link in purchase_links:
+            purchase_link["purchase_platform"] = system_product.purchase_platform
+            purchase_link["supplier_name"] = system_product.supplier_name
+            purchase_link["productId_1688"] = system_product.productId_1688
+            purchase_link["specId_1688"] = system_product.specId_1688
+            purchase_link["skuId_1688"] = system_product.skuId_1688
+            purchase_link["reference_weight"] = system_product.reference_weight
+            purchase_link["reference_cost"] = system_product.reference_cost
+            purchase_link["primary_image"] = system_product.primary_image
+
+        system_product.purchase_link = json.dumps(purchase_links,ensure_ascii=False)
+    
+    db.session.commit()
+            
+    return {},200
 
 
 # 系统管理员、部门管理员、小组管理员 和 运营可操作

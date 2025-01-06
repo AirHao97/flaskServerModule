@@ -188,13 +188,13 @@ def getFinaceAnalysisData():
                     "usdData":Decimal(0),
                     "quantity_product": int(quantity)
                 }
-            
-            if ozon_order.currency_code == "USD":
-                result["ozonProductsData"][ozon_product.id]["usdData"] += Decimal(ozon_product.price)
-            elif ozon_order.currency_code == "CNY":
-                result["ozonProductsData"][ozon_product.id]["rmbData"] += Decimal(ozon_product.price)
+
+            if ozon_product.price:
+                if ozon_order.currency_code == "USD":
+                    result["ozonProductsData"][ozon_product.id]["usdData"] += Decimal(ozon_product.price)
+                elif ozon_order.currency_code == "CNY":
+                    result["ozonProductsData"][ozon_product.id]["rmbData"] += Decimal(ozon_product.price)
         
-    
 
     for purchase_order in purchase_orders:
 
@@ -217,13 +217,14 @@ def getFinaceAnalysisData():
                     "quantity_order": 1,
                     "quantity_product": int(quantity)
                 }
-    print(result)
+    # print(result)
 
     return jsonify({
         "msg":"查询成功！",
         "data":result
     }), 200 
 
+# 更新系统内快递限重
 @general_list.route('/updateOzonOrdersWeightStandardWithExcel', methods=['POST'])
 @jwt_required()
 @active_required

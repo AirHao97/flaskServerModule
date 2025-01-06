@@ -4,13 +4,13 @@ createTime:2024/10/23 14:32
 description: 采购订单接口
 '''
 
-from flask import Blueprint,jsonify,request,current_app
+from flask import Blueprint,jsonify,request,current_app,make_response,send_file
 import pandas as pd
-from io import BytesIO
 from Models import db
 import uuid
 from flask_jwt_extended import jwt_required,get_jwt
 from sqlalchemy import or_,cast, DateTime
+from sqlalchemy.orm import joinedload
 import json
 import math
 from decimal import Decimal
@@ -19,6 +19,13 @@ import base64
 from datetime import datetime, timedelta
 import threading
 import traceback
+import xlsxwriter
+from io import BytesIO
+import io
+from PIL import Image as PILImage
+import requests
+import concurrent.futures
+import pytz
 
 from Utils.crud import getDataFromDataBase_BaseData,addDataFromDataBase,modifyDataFromDataBase,deleteDataFromDataBase
 from Utils.apiRightsDecorator import admin_required,operations_required,active_required
@@ -58,6 +65,20 @@ def getData():
         purchase_platform = request.args.get('purchase_platform',None)
         status = request.args.get('status',None)
         is_ask = request.args.get('is_ask',None)
+        dateRange = request.args.get('dateRange', None)
+
+        if dateRange:
+            dateRange = json.loads(dateRange)
+            try:
+                start_date = datetime.strptime(dateRange[0], "%Y-%m-%d %H:%M:%S")
+                end_date = datetime.strptime(dateRange[1], "%Y-%m-%d %H:%M:%S")
+                
+                utc = pytz.UTC
+                start_date_utc = start_date.astimezone(utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+                end_date_utc = end_date.astimezone(utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+
+            except ValueError:
+                return jsonify({"msg": "时间范围格式错误！"}), 400
 
         if keyWord:
             columns = [column.name for column in PurchaseOrder.__table__.columns ]
@@ -78,6 +99,11 @@ def getData():
             )
         else:
             query = PurchaseOrder.query
+
+        if dateRange:
+            query = query.filter(
+                PurchaseOrder.create_time.between(start_date, end_date),
+            )
 
         if status:
             if status == "全部":
@@ -204,29 +230,41 @@ def operationGetErrorData():
         keyWord = str(request.args.get('keyWord', None))
 
         if keyWord:
-            columns = [column.name for column in PurchaseOrder.__table__.columns ]
-            filters = [getattr(PurchaseOrder, col).like(f'%{keyWord}%') for col in columns]
-            query = PurchaseOrder.query.filter(or_(*filters))
+            purchase_product_columns = [column.name for column in PurchaseOrder.__table__.columns ]
+            purchase_product_filters = [getattr(PurchaseOrder, col).like(f'%{keyWord}%') for col in purchase_product_columns]
+
+            user_columns = [column.name for column in User.__table__.columns ]
+            user_filters = [getattr(User, col).like(f'%{keyWord}%') for col in user_columns]
+
+            filters = or_(*purchase_product_filters, *user_filters)
+
+            query = (
+                PurchaseOrder.query
+                .outerjoin(PurchaseProduct, PurchaseOrder.id == PurchaseProduct.purchase_order_id)
+                .outerjoin(OzonOrder, PurchaseProduct.ozon_order_id == OzonOrder.id)
+                .outerjoin(Shop, Shop.id == OzonOrder.shop_id)
+                .outerjoin(User, Shop.owner_id == User.id)
+                .filter(filters)
+            )
         else:
             query = PurchaseOrder.query
         
-
-        query = query.filter_by(is_error = True)
+        query = query.filter(PurchaseOrder.is_error == True)
         
         if current_user.is_admin:
             pass
         elif current_user.department and current_user.is_department_admin:
-            query = query.filter_by(department_id = current_user.department_id)
+            query = query.filter(PurchaseOrder.department_id == current_user.department_id)
         elif current_user.department and any(role.id == "1" for role in current_user.roles):
             query = query.join(
-                        PurchaseProduct, PurchaseOrder.id == PurchaseProduct.purchase_order_id
-                    ).join(
-                        OzonOrder,PurchaseProduct.ozon_order_id == OzonOrder.id
-                    ).join(
-                        Shop, OzonOrder.shop_id == Shop.id
-                    ).filter(
-                        Shop.owner_id == current_user.id
-                    )
+                PurchaseProduct, PurchaseOrder.id == PurchaseProduct.purchase_order_id
+            ).join(
+                OzonOrder,PurchaseProduct.ozon_order_id == OzonOrder.id
+            ).join(
+                Shop, OzonOrder.shop_id == Shop.id
+            ).filter(
+                Shop.owner_id == current_user.id
+            )
         else:
             return {"msg":"当前账户无操作权限！"},400
 
@@ -291,6 +329,7 @@ def operationGetErrorData():
                         "system_product_id": purchase_product.system_product_id,
                         "create_time": purchase_product.create_time,
                         "modify_time": purchase_product.modify_time,
+                        "operation": purchase_product.ozon_order.shop.owner.username
                     }
                     for purchase_product in result.purchase_products
                 ]
@@ -539,8 +578,8 @@ def updateData():
             return {"msg":"当前账户无操作权限！"},400
 
         # 订单有国内运单号并且在系统内审核的
-        # ozon_orders = [ozon_order for ozon_order in ozon_orders if (ozon_order.tracking_number and ozon_order.audit_in_system)]
-        ozon_orders = [ozon_order for ozon_order in ozon_orders if ozon_order.tracking_number]     
+        ozon_orders = [ozon_order for ozon_order in ozon_orders if (ozon_order.tracking_number and ozon_order.audit_in_system)]
+        # ozon_orders = [ozon_order for ozon_order in ozon_orders if ozon_order.tracking_number]     
 
         for ozon_order in ozon_orders:
             # 已经绑定的全部采购商品
@@ -1748,6 +1787,8 @@ def buyPurchaseProductIn1688WithAPI_flow():
 
         purchase_order_list = []
 
+        ids = []
+
         for purchase_order_msg in purchase_order_msgs:
 
             purchase_order_id = purchase_order_msg["id"]
@@ -1781,6 +1822,7 @@ def buyPurchaseProductIn1688WithAPI_flow():
             purchase_order_list.append(purchase_order)
 
             if purchase_order.system_product.skuId_1688 == "无":
+                ids.append(purchase_order.system_product.id)
                 cargoParamList.append(
                     {
                         "offerId": purchase_order.system_product.productId_1688,
@@ -1788,6 +1830,7 @@ def buyPurchaseProductIn1688WithAPI_flow():
                     }
                 )
             else:
+                ids.append(purchase_order.system_product.id)
                 cargoParamList.append(
                     {
                         "offerId": purchase_order.system_product.productId_1688,
@@ -1804,8 +1847,14 @@ def buyPurchaseProductIn1688WithAPI_flow():
             amount = 0
             
             for product in data["data"]["orderPreviewResuslt"][0]["cargoList"]:
-                productId_1688 = product["offerId"]
-                system_product = SystemProduct.query.filter_by(productId_1688 = productId_1688).first()
+                
+                
+                if "skuId" in  product:
+                    skuId_1688 = product["skuId"]
+                    system_product = SystemProduct.query.filter_by(skuId_1688 = skuId_1688).filter(SystemProduct.id.in_(ids)).first()
+                else:
+                    productId_1688 = product["offerId"]
+                    system_product = SystemProduct.query.filter_by(productId_1688 = productId_1688).filter(SystemProduct.id.in_(ids)).first()
                 
                 if system_product:
                     amount += product["amount"]
@@ -1955,8 +2004,8 @@ def buyPurchaseProductIn1688WithAPI_buy():
                     "msg":"未找到对应用户！",
                 }), 400 
 
-@purchase_order_list.route('/updatePurchaseOrdersInPddWithData', methods=['POST'])
 # 更新pdd订单数据
+@purchase_order_list.route('/updatePurchaseOrdersInPddWithData', methods=['POST'])
 def updatePurchaseOrdersInPddWithData():
     try:
         data = request.get_json()
@@ -2035,3 +2084,132 @@ def updatePurchaseOrdersInPddWithData():
         stack_trace = traceback.format_exc()
         operate_log_writer_func(operateType=OperateType.purchaseOrder,describe=f"更新pdd订单失败!,错误信息”：{stack_trace}",isSystem=True)
         return jsonify({"msg":f"更新pdd订单失败!,错误信息”：{stack_trace}"}),400
+
+# 打印线下的待采购商品清单
+# 系统管理员、部门管理员 和 采购可操作
+@purchase_order_list.route('/getUnderLinePurchaseProductsToExcel', methods=['GET'])
+@jwt_required()
+@active_required
+def getUnderLinePurchaseProductsToExcel():
+    current_user = get_jwt()
+    current_user = User.query.filter_by(id=current_user['id']).first()
+
+    if current_user:
+
+        query = PurchaseOrder.query.filter_by(
+            status = PurchaseStatus.waitForPurchase
+        ).filter_by(
+            purchase_platform = "线下"
+        )
+     
+        if current_user.is_admin:
+            pass
+        elif current_user.department and (current_user.is_department_admin or any(role.id == "2" for role in current_user.roles)):
+            query = query.filter_by(department_id = current_user.department_id)
+        else:
+            return {"msg":"当前账户无操作权限！"},400
+        
+        purchase_order_list = query.all()
+
+        data = {}
+
+        for purchase_order in purchase_order_list:
+
+            for purchase_product in purchase_order.purchase_products:
+
+                if purchase_product.status == PurchaseProductStatus.wait_purchase:
+                    
+                    if purchase_product.system_product_id in data:
+                        data[purchase_product.system_product_id]["quantity"] += 1
+                    else:
+                        data[purchase_product.system_product_id] = {"quantity":1,"sku":purchase_product.system_product.system_sku,"pic":purchase_product.system_product.primary_image}
+
+        data = [{"pic":value["pic"],"sku":value["sku"],"quantity":value["quantity"]} for key,value in data.items()]
+
+        output = io.BytesIO()
+
+        # 获取全部的图片io
+        def getPicIO(item):
+            try:
+                timeout = 10
+                response = requests.get(item["pic"] ,timeout=timeout)
+                if response.status_code == 200:
+                    # print(f"order:{order['货件号']} 运行成功！")
+                    item["pic"] = BytesIO(response.content)
+                else:
+                    item["pic"] = None
+            except:
+                item["pic"] = None
+
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=30) as executor:
+            futures = [executor.submit(getPicIO, item) for item in data]
+            concurrent.futures.wait(futures)
+            
+            # 创建DataFrame
+            df = pd.DataFrame(data)
+
+            # 创建一个新的Excel文件
+            workbook = xlsxwriter.Workbook(output, {'in_memory': True})
+            worksheet = workbook.add_worksheet()
+
+            # 标题
+            for col_idx, col_name in enumerate(df.columns):
+                worksheet.write(0, col_idx, col_name)
+
+            # 写数据
+            for row_idx, row_data in enumerate(df.values):
+                # row_data 形如 (BytesIO 或 None, "SKU", 1)
+                for col_idx, cell_value in enumerate(row_data):
+                    # 如果是图片列
+                    if col_idx == 0:
+                        img_data = cell_value  # BytesIO 或者 None
+                        if img_data:
+                            try:
+                                pil_img = PILImage.open(img_data)
+                                # 调整大小
+                                pil_img = pil_img.resize((80, 80))
+                                # 二次写入 BytesIO 用于 xlsxwriter
+                                resized_data = BytesIO()
+                                pil_img.save(resized_data, format='PNG')
+                                resized_data.seek(0)
+
+                                worksheet.set_column(0, 0, 15)
+                                worksheet.set_row(row_idx + 1, 80)
+
+                                # 插入图片
+                                worksheet.insert_image(
+                                    row_idx + 1, 
+                                    0, 
+                                    '', 
+                                    {'image_data': resized_data, 'x_scale': 1, 'y_scale': 1}
+                                )
+                            except Exception as e:
+                                print(f"图片加载失败：{e}")
+                            # 给这个单元格写空字符串或别的占位
+                            worksheet.write(row_idx + 1, 0, "")
+                        else:
+                            # 如果没有图片，写一个提示或空白
+                            worksheet.write(row_idx + 1, 0, "No Image")
+                    else:
+                        worksheet.write(row_idx + 1, col_idx, cell_value)
+
+            # 关闭并保存Excel文件
+            workbook.close()
+            # 确保流的指针在开始位置
+            output.seek(0)
+
+            # 将流作为文件返回给前端
+            response = make_response(send_file(
+                output,
+                as_attachment=True,
+                download_name="Ozon订单数据.xlsx",
+                mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            ))
+
+            return response
+
+    else:
+       return jsonify({
+            "msg":"未找到对应用户！",
+        }), 401
