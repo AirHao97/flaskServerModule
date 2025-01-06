@@ -556,6 +556,8 @@ def controlData():
 
     for system_product in system_products:
         purchase_links = json.loads(system_product.purchase_link)
+        if len(purchase_links)>1:
+            purchase_links = [purchase_links[0]]
         for purchase_link in purchase_links:
             purchase_link["purchase_platform"] = system_product.purchase_platform
             purchase_link["supplier_name"] = system_product.supplier_name

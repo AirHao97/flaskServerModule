@@ -268,9 +268,9 @@ def updataDataThread(app,upDateDays):
 
                             try:
                                 if modify_context_purchase_order:
-                                    operate_log_writer_func(operateType=OperateType.purchaseOrder,describe=json.loads(modify_context_purchase_order),isSystem=True)
+                                    operate_log_writer_func(operateType=OperateType.purchaseOrder,describe=json.dumps(modify_context_purchase_order),isSystem=True)
                                 if modify_context_purchase_product:
-                                    operate_log_writer_func(operateType=OperateType.purchaseProduct,describe=json.loads(modify_context_purchase_product),isSystem=True)
+                                    operate_log_writer_func(operateType=OperateType.purchaseProduct,describe=json.dumps(modify_context_purchase_product),isSystem=True)
                                 db.session.add_all(addList_order)
                                 db.session.add_all(addList_product)
                                 db.session.add_all(addList_relation)

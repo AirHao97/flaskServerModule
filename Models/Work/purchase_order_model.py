@@ -29,7 +29,6 @@ class PurchaseOrder(db.Model):
 
     packer_msg = db.Column(db.Text, doc='打包入库异常留言')
 
-
     # 1688 pdd 线下
     purchase_platform = db.Column(db.Text, doc='采购平台')
     # 采购状态

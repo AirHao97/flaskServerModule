@@ -347,7 +347,7 @@ def operationGetErrorData():
                 "msg":"未找到对应用户！",
             }), 400  
 
-# 手动修改采购订单的信息
+# 手动修改采购订单的信息(异常信息)
 # 系统管理员、部门管理员 和 运营 可操作
 # 只能修改备注信息
 @purchase_order_list.route('/operationModifyData', methods=['POST'])
@@ -1113,6 +1113,71 @@ def modifyData():
         return {"msg":"采购订单信息修改成功！"}, 200  
     except Exception as e:
         return {"msg":"采购订单信息修改失败！"}, 400
+
+# 拆分采购订单
+# 系统管理员、部门管理员 和 采购 可操作
+@purchase_order_list.route('/divideData', methods=['POST'])
+@jwt_required()
+@active_required
+def divideData(): 
+    current_user = get_jwt()
+    current_user = User.query.filter_by(id=current_user['id']).first()
+
+    data = request.get_json()
+
+    if "id" in data:
+        purchase_order_id = data['id']
+    else:
+        return jsonify({"msg":"id 不能为空！"}),401
+    
+    if "number" in data:
+        number = data['number']
+    else:
+        return jsonify({"msg":"拆分数量不能为空！"}),401
+    
+    purchase_order = PurchaseOrder.query.filter_by(id = purchase_order_id).first()
+
+    if not purchase_order:
+        return {"msg":f"找不到id为{purchase_order_id}的产品！"},401
+    
+    if not purchase_order.status == PurchaseStatus.waitForPurchase:
+        return {"msg":f"只能拆分待采购采购单，当前采购单状态为：{purchase_order.status}，无法拆分！"},400
+
+    # 权限校验
+    if not current_user.is_admin:
+        if not (current_user.is_department_admin and purchase_order.department_id == current_user.department_id):
+            if not (any(role.id == "2" for role in current_user.roles) and purchase_order.department_id == current_user.department_id):
+                return {"msg":"当前账户无操作权限！"},400
+            
+    
+    change_purchase_products_ids = []
+
+    purchase_products = purchase_order.purchase_products
+
+    if int(number) > len(purchase_products):
+        return {"msg":f"拆分数量不能大于被拆分采购单总商品数量！"},400
+    
+    new_purchase_order = PurchaseOrder()
+    new_purchase_order.id = str(uuid.uuid1())
+    new_purchase_order.purchase_platform = purchase_order.purchase_platform
+    new_purchase_order.status = PurchaseStatus.waitForPurchase
+    new_purchase_order.system_product_id = purchase_order.id
+    new_purchase_order.department_id = purchase_order.department_id
+    new_purchase_order.system_product_id = purchase_order.system_product_id
+
+    db.session.add(new_purchase_order)
+    
+    for index in range(int(number)):
+        purchase_product = purchase_products[index]
+        change_purchase_products_ids.append(purchase_product.id)
+        purchase_product.purchase_order_id = new_purchase_order.id
+
+    try:
+        db.session.commit()
+        operate_log_writer_func(operateType=OperateType.purchaseOrder,describe=f"操作人:{current_user.username}, 操作:采购单拆单 id:{purchase_order.id} 拆出{number}, 生成新采购单{new_purchase_order.id}, 采购商品id：{change_purchase_products_ids} 更换采购单 {purchase_order.id} => {new_purchase_order.id}")
+        return {"msg":"采购订单拆单成功！"}, 200  
+    except Exception as e:
+        return {"msg":"采购订单拆单失败！"}, 400
     
 # 采购单作废
 # 系统管理员、部门管理员 和 采购 可操作
