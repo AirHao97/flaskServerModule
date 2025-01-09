@@ -67,7 +67,10 @@ class OzonOrder(db.Model):
     shop_id = db.Column(db.Text, db.ForeignKey('shop.id'))
 
     # 关联采购商品
-    purchase_products = db.relationship('PurchaseProduct', backref='ozon_order')
+    purchase_products = db.relationship('PurchaseProduct', backref='ozon_order', foreign_keys='PurchaseProduct.ozon_order_id')
+
+    # 关联仓库内丢失的采购商品
+    loss_purchase_products = db.relationship('PurchaseProduct', backref='loss_for_ozon_order', foreign_keys='PurchaseProduct.loss_for_ozon_order_id')
 
     create_time = db.Column(db.DateTime, default = datetime.datetime.now, doc='创建时间')
     modify_time = db.Column(db.DateTime, onupdate = datetime.datetime.now, doc='修改时间')

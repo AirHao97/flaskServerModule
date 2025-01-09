@@ -23,10 +23,12 @@ from Utils.Constant.purchaseProductType import PurchaseProductType
 from Utils.purchase_product_label_print import generate_qrcodes_pdf
 
 
+from Models.Work.ozon_order_model import OzonOrder
 from Models.Work.system_product_model import SystemProduct
 from Models.Work.purchase_product_model import PurchaseProduct
 from Models.User.user_model import User
 from Utils.Constant.purchaseProductStatus import PurchaseProductStatus
+from Utils.Constant.systemStatus import SystemStatus
 
 purchase_product_list = Blueprint('purchase_product', __name__, url_prefix='/purchase_product')
 
@@ -101,7 +103,7 @@ def getData():
             }), 400 
 
 # 新增数据
-# 系统管理员、部门管理员、小组管理员 和 运营可操作
+# 系统管理员、部门管理员、小组管理员 和 采购可操作
 @purchase_product_list.route('/addData', methods=['POST'])
 @jwt_required()
 @active_required
@@ -325,7 +327,7 @@ def getDataInStockHistrory():
                 "create_time": result.create_time,
                 "modify_time": result.modify_time,
 
-                "posting_number": result.ozon_order.posting_number
+                "posting_number": result.ozon_order.posting_number if result.ozon_order else ""
 
             } 
             for result in results],
@@ -408,7 +410,7 @@ def getDataOutStockHistrory():
                 "create_time": result.create_time,
                 "modify_time": result.modify_time,
 
-                "posting_number": result.ozon_order.posting_number
+                "posting_number": result.ozon_order.posting_number if result.ozon_order else ""
 
             } 
             for result in results],
@@ -475,3 +477,98 @@ def printThePurchaseProduct():
     except Exception as e:
         operate_log_writer_func(operateType=OperateType.purchaseProduct, describe=f"操作人:{current_user.username}, 操作:打印采购商品入库单, id:{purchase_product.id}, 报错：{e}")
         return {"msg":f"采购商品出库采购订单{purchase_product.id}打印入库单失败！","data":None}, 400
+
+# 采购商品丢失上报
+# 系统管理员、部门管理员、小组管理员 和 打包可操作
+@purchase_product_list.route('/purchaseProductLossPost', methods=['POST'])
+@jwt_required()
+@active_required
+def purchaseProductLossPost():
+    current_user = get_jwt()
+    current_user = User.query.filter_by(id=current_user['id']).first()
+    data = request.get_json()
+
+    context = []
+
+    if not current_user.is_admin:
+        if not (current_user.is_department_admin and current_user.department):
+            if not any(role.id == "3" for role in current_user.roles):
+                return {"msg":"当前账户无操作权限！"},400
+
+    if "purchase_product_id" in data:
+        purchase_product_id = data['purchase_product_id']
+        
+        purchase_product = PurchaseProduct.query.filter_by(id = purchase_product_id).first()
+
+        if not purchase_product:
+            return {"msg":"找不到对应id的采购商品！"},401
+    else:
+        return {"msg":"采购商品对应的系统内商品id不能为空！"},400
+    
+    # 对应的ozon订单状态回退至 已审核待备货
+    ozon_order = OzonOrder.query.filter_by(id = purchase_product.ozon_order_id).first()
+
+    if ozon_order:
+        if ozon_order.system_status == SystemStatus.stockPreparedPendingOutward:
+            context.append(f"Ozon订单:{ozon_order.id} 状态转变{ozon_order.system_status} => {SystemStatus.reviewedPendingStock} ")
+            ozon_order.system_status = SystemStatus.reviewedPendingStock
+
+    purchase_product.status = PurchaseProductStatus.loss
+    purchase_product.loss_for_ozon_order_id = purchase_product.ozon_order_id
+    purchase_product.ozon_order_id = None  
+    purchase_product.loss_date = datetime.datetime.now()
+        
+    try:
+        db.session.commit()
+        operate_log_writer_func(operateType=OperateType.purchaseProduct, describe=f"操作人:{current_user.username}, 操作:采购商品丢失上报, id:{purchase_product.id},ozon订单修改{context}")
+        return {"msg":"采购商品丢失上报成功！"}, 200
+    except Exception as e:
+        return {"msg":"采购商品丢上时报失败！"}, 400
+
+# 查询全部的采购商品数据
+# 系统管理员、部门管理员、小组管理员 和 采购可操作
+@purchase_product_list.route('/getDataLS', methods=['GET'])
+@jwt_required()
+@active_required
+def getDataLS():
+    current_user = get_jwt()
+    current_user = User.query.filter_by(id=current_user['id']).first()
+
+    if current_user:
+        keyWord = str(request.args.get('keyWord', None))
+
+        if keyWord:
+            columns = [column.name for column in PurchaseProduct.__table__.columns ]
+            filters = [getattr(PurchaseProduct, col).like(f'%{keyWord}%') for col in columns]
+            query = PurchaseProduct.query.filter(or_(*filters))
+        else:
+            query = PurchaseProduct.query
+
+        if not current_user.is_admin:
+            if not (current_user.is_department_admin):
+                if not (current_user.is_team_admin):
+                    if not any(role.id == "2" for role in current_user.roles):
+                        return {"msg":"当前账户无操作权限！"},400
+
+        results = query.order_by(PurchaseProduct.create_time).all()
+        
+
+        purchase_orders = {}
+
+        for item in results:
+            if item.ozon_order:
+                if not item.ozon_order.audit_in_system:
+                    if item.purchase_order.id not in purchase_orders:
+                        purchase_orders[item.purchase_order.id] = [item.ozon_order.id]
+                    else:
+                        purchase_orders[item.purchase_order.id].append(item.ozon_order.id)
+        
+
+        return jsonify({
+            "msg":"查询成功！",
+            "purchase_orders":purchase_orders
+        }), 200 
+    else:
+       return jsonify({
+                "msg":"未找到对应用户！",
+            }), 400 

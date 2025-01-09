@@ -55,7 +55,7 @@ def initAdminAccount():
         return jsonify({"msg": "已完成初始化，请勿重复操作！"}), 400
 
 
-# 查询数据
+# 管理员查询数据
 @shop_list.route('/getData', methods=['GET'])
 @jwt_required()
 @active_required
@@ -98,6 +98,48 @@ def getData():
         }
     }), 200 
 
+
+# 用户查询自己关联的店铺数据
+@shop_list.route('/getDataByUser', methods=['GET'])
+@jwt_required()
+@active_required
+def getDataByUser():
+
+    current_user = get_jwt()
+    user = User.query.filter_by(id=current_user['id']).first()
+
+    if user.is_admin:
+        query = Shop.query
+    elif user.is_department_admin and user.department_id:
+        query = Shop.query.join(
+            User, User.id == Shop.owner_id
+        ).filter(
+            User.department_id == user.department_id
+        )
+    elif user.is_team_admin and user.team_id:
+        query = Shop.query.join(
+            User, User.id == Shop.owner_id
+        ).filter(
+            User.team_id == user.team_id
+        )
+    else:
+        query = Shop.query.filter_by(owner_id = user.id )
+
+
+    results = query.order_by(Shop.create_time).all()
+    
+    results = [{
+       "id": result.id,
+       "name": result.name,
+    } for result in results]
+
+    return jsonify({
+        "msg":"查询成功！",
+        "data":{
+            "data":results,
+            "count":len(results)
+        }
+    }), 200 
 
 # 管理员新增数据
 @shop_list.route('/addData', methods=['POST'])

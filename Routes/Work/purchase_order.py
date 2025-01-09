@@ -98,7 +98,7 @@ def getData():
                 .filter(filters)
             )
         else:
-            query = PurchaseOrder.query
+            query = PurchaseOrder.query.outerjoin(SystemProduct, SystemProduct.id == PurchaseOrder.system_product_id)
 
         if dateRange:
             query = query.filter(
@@ -109,13 +109,13 @@ def getData():
             if status == "全部":
                 pass
             else:
-               query = query.filter_by(status=status)
+               query = query.filter(PurchaseOrder.status == status)
         
         if purchase_platform:
             if purchase_platform == "全部":
                 pass
             else:
-                query = query.filter_by(purchase_platform=purchase_platform)
+                query = query.filter(PurchaseOrder.purchase_platform == purchase_platform)
         else:
             return {"msg":"平台选择不能为空！"},400
         
@@ -123,19 +123,27 @@ def getData():
             if is_ask == "全部":
                 pass
             elif is_ask == "咨询中":
-                query = query.filter_by(is_error=True)
+                query = query.filter(PurchaseOrder.is_error == True)
             elif is_ask == "未咨询":
-                query = query.filter_by(is_error=False)
+                query = query.filter(PurchaseOrder.is_error == False)
 
         if current_user.is_admin:
             pass
         elif current_user.department and (current_user.is_department_admin or any(role.id == "2" for role in current_user.roles)):
-            query = query.filter_by(department_id = current_user.department_id)
+            query = query.filter(PurchaseOrder.department_id == current_user.department_id)
         else:
             return {"msg":"当前账户无操作权限！"},400
 
-        results = query.order_by(PurchaseOrder.create_time).offset(start).limit(limit).all()
-        count = query.order_by(PurchaseOrder.create_time).count()
+        if status and status == "待采购":
+            # 先筛出待采购
+            query = query.filter(PurchaseOrder.status == "待采购")
+            # 再按 father_id 和 create_time 排序
+            query = query.order_by(SystemProduct.father_id.asc(),PurchaseOrder.create_time.asc())
+        else:
+            query = query.order_by(PurchaseOrder.create_time.asc())
+
+        results = query.offset(start).limit(limit).all()
+        count = query.count()
             
         results = {
             "data" :[
@@ -155,7 +163,8 @@ def getData():
                 "fill_purchase_id_time": result.fill_purchase_id_time,
                 "packer_msg":result.packer_msg,
                 "back_fee":result.back_fee,
-
+                "mark": result.mark,
+                
                 "wait_for_purchase_quantity": len([item for item in result.purchase_products if item.status == PurchaseProductStatus.wait_purchase]),
                 "in_basket_quantity": len([item for item in result.purchase_products if item.status == PurchaseProductStatus.in_basket]),
                 "in_transit_quantity": len([item for item in result.purchase_products if item.status == PurchaseProductStatus.in_transit]),
@@ -212,7 +221,6 @@ def getData():
        return jsonify({
                 "msg":"未找到对应用户！",
             }), 400  
-
 
 # 查询异常的采购数据
 # 系统管理员、部门管理员 和 运营 可操作
@@ -289,6 +297,7 @@ def operationGetErrorData():
                 "fill_purchase_id_time": result.fill_purchase_id_time,
                 "packer_msg":result.packer_msg,
                 "back_fee":result.back_fee,
+                "mark": result.mark,
 
                 "wait_for_purchase_quantity": len([item for item in result.purchase_products if item.status == PurchaseProductStatus.wait_purchase]),
                 "in_basket_quantity": len([item for item in result.purchase_products if item.status == PurchaseProductStatus.in_basket]),
@@ -501,6 +510,7 @@ def getDataInPurchaseMode():
                 "fill_purchase_id_time": result.fill_purchase_id_time,
                 "packer_msg":result.packer_msg,
                 "back_fee":result.back_fee,
+                "mark": result.mark,
 
                 "wait_for_purchase_quantity": len([item for item in result.purchase_products if item.status == PurchaseProductStatus.wait_purchase]),
                 "in_basket_quantity": len([item for item in result.purchase_products if item.status == PurchaseProductStatus.in_basket]),
@@ -1106,6 +1116,9 @@ def modifyData():
     if "back_fee" in data:
         modifyContext.append(f"退货费用:({purchase_order.back_fee} -> {data['back_fee']})")
         purchase_order.back_fee = data['back_fee']
+    if "mark" in data:
+        modifyContext.append(f"订单备注:({purchase_order.mark} -> {data['mark']})")
+        purchase_order.mark = data['mark']
 
     try:
         db.session.commit()
@@ -1191,8 +1204,8 @@ def cancleThePurchaseOrder():
 
     if not current_user.is_admin:
         if not (current_user.is_department_admin):
-                if not any(role.id == "2" for role in current_user.roles):
-                    return {"msg":"当前账户无操作权限！"},400
+            if not any(role.id == "2" for role in current_user.roles):
+                return {"msg":"当前账户无操作权限！"},400
         
     data = request.get_json()
 
@@ -1286,6 +1299,7 @@ def getThePostingOfPurchaseOrder():
                 "fill_purchase_id_time": result.fill_purchase_id_time,
                 "packer_msg":result.packer_msg,
                 "back_fee":result.back_fee,
+                "mark": result.mark,
 
                 "wait_for_purchase_quantity": len([item for item in result.purchase_products if item.status == PurchaseProductStatus.wait_purchase]),
                 "in_basket_quantity": len([item for item in result.purchase_products if item.status == PurchaseProductStatus.in_basket]),
@@ -1392,6 +1406,7 @@ def signTheSystemProductsOfPurchaseOrder():
         
         if msg:
             purchase_order.packer_msg = msg
+            purchase_order.packer_msg_date = datetime.now()
         
         purchase_products_wait_for_sign = [item for item in purchase_order.purchase_products if item.status == PurchaseProductStatus.in_transit]
         purchase_products_wait_for_sign_numbers = len(purchase_products_wait_for_sign)
@@ -1549,6 +1564,7 @@ def getInTransitPurchaseOrderData():
                 "fill_purchase_id_time": result.fill_purchase_id_time,
                 "packer_msg":result.packer_msg,
                 "back_fee":result.back_fee,
+                "mark": result.mark,
 
                 "wait_for_purchase_quantity": len([item for item in result.purchase_products if item.status == PurchaseProductStatus.wait_purchase]),
                 "in_basket_quantity": len([item for item in result.purchase_products if item.status == PurchaseProductStatus.in_basket]),
@@ -1911,16 +1927,34 @@ def buyPurchaseProductIn1688WithAPI_flow():
             products = []
             amount = 0
             
+            sumPayment = data["data"]["orderPreviewResuslt"][0]["sumPayment"]
+            sumCarriage = data["data"]["orderPreviewResuslt"][0]["sumCarriage"]
+            sumPaymentNoCarriage = data["data"]["orderPreviewResuslt"][0]["sumPaymentNoCarriage"]
+
+
             for product in data["data"]["orderPreviewResuslt"][0]["cargoList"]:
-                
                 
                 if "skuId" in  product:
                     skuId_1688 = product["skuId"]
+                    productId_1688 = product["offerId"]
+                    specId_1688 =  product["specId"]
+
                     system_product = SystemProduct.query.filter_by(skuId_1688 = skuId_1688).filter(SystemProduct.id.in_(ids)).first()
+
+                    for item in cargoParamList:
+                        if "specId" in item:
+                            if item["specId"] == specId_1688:
+                                quantity = item["quantity"]
+
                 else:
                     productId_1688 = product["offerId"]
                     system_product = SystemProduct.query.filter_by(productId_1688 = productId_1688).filter(SystemProduct.id.in_(ids)).first()
+
+                    for item in cargoParamList:
+                        if item["offerId"] == productId_1688:
+                            quantity = item["quantity"]
                 
+
                 if system_product:
                     amount += product["amount"]
 
@@ -1936,7 +1970,7 @@ def buyPurchaseProductIn1688WithAPI_flow():
                             "supplier_name": system_product.supplier_name,
                             "finalUnitPrice": product["finalUnitPrice"],
                             "amount": product["amount"],
-                            "number": float(product["amount"]) // float(product["finalUnitPrice"])
+                            "quantity": quantity if quantity else None
                         }
                     )
             return {
@@ -1945,7 +1979,10 @@ def buyPurchaseProductIn1688WithAPI_flow():
                     "products":products,
                     "flow":flow,
                     "purchase_order_msgs":purchase_order_msgs,
-                    "amount": amount
+                    "amount": amount,
+                    "sumPayment": sumPayment,
+                    "sumCarriage": sumCarriage,
+                    "sumPaymentNoCarriage": sumPaymentNoCarriage
                 }
             },200
             
@@ -2110,7 +2147,7 @@ def updatePurchaseOrdersInPddWithData():
 
             for purchase_product in purchase_order.purchase_products:
                 if purchase_product.status != PurchaseProductStatus.loss:
-                    purchase_product.price = order["order_amount"]/goods_number
+                    purchase_product.price = order["order_amount"]/goods_number/100
                         
             if (
                 status_str == "未发货，退款成功" 

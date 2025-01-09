@@ -44,6 +44,8 @@ class PurchaseProduct(db.Model):
     # 关联麻袋
     package_id = db.Column(db.Text, db.ForeignKey('package.id'))
 
+    # 关联ozon订单
+    loss_for_ozon_order_id = db.Column(db.Text, db.ForeignKey('ozon_order.id'))
 
     # 关联创建者
     create_time = db.Column(db.DateTime, default = datetime.datetime.now, doc='创建时间')

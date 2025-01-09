@@ -120,9 +120,6 @@ def updataDataThread(app,upDateDays):
                 offsetNumber = 0
                 
                 while has_next:
-
-                    modify_context_purchase_order = []
-                    modify_context_purchase_product = []
                     
                     updataMsg["msg"] = f"正在更新店铺:{i.name},更新店铺数量{index}/{len(shops)},已更新数据{num * 1000}条"
 
@@ -133,6 +130,9 @@ def updataDataThread(app,upDateDays):
                         orders = result["data"]["postings"]
 
                         for itemOrders in orders:
+
+                            modify_context_purchase_order = []
+                            modify_context_purchase_product = []
 
                             addList_order = []
                             addList_product = []
@@ -268,9 +268,9 @@ def updataDataThread(app,upDateDays):
 
                             try:
                                 if modify_context_purchase_order:
-                                    operate_log_writer_func(operateType=OperateType.purchaseOrder,describe=json.dumps(modify_context_purchase_order),isSystem=True)
+                                    operate_log_writer_func(operateType=OperateType.purchaseOrder,describe=f"{modify_context_purchase_order}",isSystem=True)
                                 if modify_context_purchase_product:
-                                    operate_log_writer_func(operateType=OperateType.purchaseProduct,describe=json.dumps(modify_context_purchase_product),isSystem=True)
+                                    operate_log_writer_func(operateType=OperateType.purchaseProduct,describe=f"{modify_context_purchase_product}",isSystem=True)
                                 db.session.add_all(addList_order)
                                 db.session.add_all(addList_product)
                                 db.session.add_all(addList_relation)
@@ -370,13 +370,11 @@ def updataDataThread(app,upDateDays):
                                 db.session.commit()
 
                             except Exception as e:
-                                updataMsg["msg"] = f"{shop.name}ozon商品更新失败!错误信息：{e}"
-                                operate_log_writer_func(operateType=OperateType.ozonProduct,describe=f'{shop.name}ozon商品更新失败，错误信息”：{e}',isSystem=True)
-                                return 
+                                updataMsg["msg"] = f"{shop.name}ozon商品{ozon_product.id}更新失败!错误信息：{e}"
+                                operate_log_writer_func(operateType=OperateType.ozonProduct,describe=f'{shop.name}ozon商品{ozon_product.id}更新失败，错误信息”：{e}',isSystem=True)
                         else:
-                            operate_log_writer_func(operateType=OperateType.ozonProduct,describe=f'{shop.name}ozon商品更新失败,错误信息”：{result["msg"]}',isSystem=True)
-                            updataMsg["msg"] = f'{shop.name}ozon商品更新失败,错误信息”：{result["msg"]}'
-                            return
+                            operate_log_writer_func(operateType=OperateType.ozonProduct,describe=f'{shop.name}ozon商品{ozon_product.id}更新失败,错误信息”：{result["msg"]}',isSystem=True)
+                            updataMsg["msg"] = f'{shop.name}ozon商品{ozon_product.id}更新失败,错误信息”：{result["msg"]}'
 
 
             with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
@@ -390,9 +388,9 @@ def updataDataThread(app,upDateDays):
 
         except Exception as e:
             updataRunning = False  
-            operate_log_writer_func(operateType=OperateType.ozonOrder,describe=f"ozonc产品更新失败,错误信息”：{e}",isSystem=True)
             stack_trace = traceback.format_exc()
             updataMsg["msg"] =  f"ozon商品更新失败,错误信息”：{stack_trace}"
+            operate_log_writer_func(operateType=OperateType.ozonOrder,describe=f"ozon产品更新失败,错误信息”：{stack_trace}",isSystem=True)
             return
 
 # ozon订单/ozon 商品 初始化（加载四个月内 所有创建的店铺的ozon订单）
@@ -456,6 +454,12 @@ def getData():
         order_way = request.args.get('order_way', None)
         options_match = request.args.get('options_match', None)
 
+        selectedShops = request.args.get('selectedShops', None)
+
+
+        if selectedShops:
+            selectedShops = json.loads(selectedShops)
+
         if dateRange:
             dateRange = json.loads(dateRange)
             try:
@@ -476,20 +480,26 @@ def getData():
             product_columns = [column.name for column in OzonProduct.__table__.columns]
             # 获取 Shop 的所有字段
             shop_columns = [column.name for column in Shop.__table__.columns]
+            # 获取 User 的所有字段
+            user_columns = [column.name for column in User.__table__.columns]
             # 构建 OzonOrder 字段的过滤条件
             order_filters = [getattr(OzonOrder, col).like(f'%{keyWord1}%') for col in order_columns]
             # 构建 OzonProduct 字段的过滤条件
             product_filters = [getattr(OzonProduct, col).like(f'%{keyWord1}%') for col in product_columns]
             # 构建 Shop 字段的过滤条件
             shop_filters = [getattr(Shop, col).like(f'%{keyWord1}%') for col in shop_columns]
+            # 构建 User 字段的过滤条件
+            user_filters = [getattr(User, col).like(f'%{keyWord1}%') for col in user_columns]
+
             # 联合查询条件
-            filters = or_(*order_filters, *product_filters, *shop_filters)
+            filters = or_(*order_filters, *product_filters, *shop_filters, *user_filters)
 
             query = (
                 OzonOrder.query
                 .outerjoin(OzonOrderOzonProduct, OzonOrder.id == OzonOrderOzonProduct.order_id)
                 .outerjoin(OzonProduct, OzonOrderOzonProduct.product_id == OzonProduct.id)
                 .outerjoin(Shop, Shop.id == OzonOrder.shop_id)
+                .outerjoin(User, Shop.owner_id == User.id)
                 .filter(filters)
                 .options(joinedload(OzonOrder.ozon_products_msg))
             )
@@ -503,14 +513,19 @@ def getData():
             product_columns = [column.name for column in OzonProduct.__table__.columns]
             # 获取 Shop 的所有字段
             shop_columns = [column.name for column in Shop.__table__.columns]
+            # 获取 User 的所有字段
+            user_columns = [column.name for column in User.__table__.columns]
             # 构建 OzonOrder 字段的过滤条件
-            order_filters = [getattr(OzonOrder, col).like(f'%{keyWord2}%') for col in order_columns]
+            order_filters = [getattr(OzonOrder, col).like(f'%{keyWord1}%') for col in order_columns]
             # 构建 OzonProduct 字段的过滤条件
-            product_filters = [getattr(OzonProduct, col).like(f'%{keyWord2}%') for col in product_columns]
+            product_filters = [getattr(OzonProduct, col).like(f'%{keyWord1}%') for col in product_columns]
             # 构建 Shop 字段的过滤条件
-            shop_filters = [getattr(Shop, col).like(f'%{keyWord2}%') for col in shop_columns]
+            shop_filters = [getattr(Shop, col).like(f'%{keyWord1}%') for col in shop_columns]
+            # 构建 User 字段的过滤条件
+            user_filters = [getattr(User, col).like(f'%{keyWord1}%') for col in user_columns]
+
             # 联合查询条件
-            filters = or_(*order_filters, *product_filters, *shop_filters)
+            filters = or_(*order_filters, *product_filters, *shop_filters, *user_filters)
 
             query = (
                 query
@@ -521,6 +536,17 @@ def getData():
             query = query.filter(
                 OzonOrder.in_process_at.between(start_date_utc, end_date_utc),
             )
+        
+        
+        if selectedShops:
+            if keyWord1 or keyWord2:
+                query = query.filter(
+                    Shop.id.in_(selectedShops)
+                )
+            else:
+                query = query.outerjoin(Shop, Shop.id == OzonOrder.shop_id).filter(
+                    Shop.id.in_(selectedShops)
+                )
 
         if system_status and system_status != "全部":
             query = query.filter(OzonOrder.system_status == system_status)
@@ -1085,8 +1111,7 @@ def auditOrder():
                 order.system_status = SystemStatus.waitForOzon
                 order.approval_time = datetime.now()
                 order.audit_in_system = True
-
-
+            
                 # 未拆分
                 if (len(result["data"]["result"]) == 1):
                     pass
@@ -1110,8 +1135,8 @@ def auditOrder():
                             
                             # 删除多余的连接关系
                             relations = OzonOrderOzonProduct.query.filter_by(order_id=order.id).all()                            
-                            itemRelationList_id = [item.id for item in itemRelationList]
-                            to_delete_relations = [item for item in relations if item.id not in itemRelationList_id]
+                            itemRelationList_id = [item.order_id+item.product_id for item in itemRelationList]
+                            to_delete_relations = [item for item in relations if item.order_id+item.product_id not in itemRelationList_id]
                             for relation in to_delete_relations:
                                 db.session.delete(relation)
 
@@ -1315,7 +1340,7 @@ def auditOrdersWithSingleProduct():
     current_user = get_jwt()
     user = User.query.filter_by(id=current_user['id']).first()
 
-    query = OzonOrder.query
+    query = OzonOrder.query.filter(OzonOrder.system_status == SystemStatus.createdPendingReview)
 
     if user.is_admin:
         results = query.all()
@@ -1836,6 +1861,7 @@ def getStockPreparedPendingOutwardOzonOrderData():
                         "sku": purchase_product.sku,
                         "type": purchase_product.type,
                         "status": purchase_product.status,
+                        "stock_in_date": purchase_product.stock_in_date,
                         "purchase_order_id": purchase_product.purchase_order_id,
                         "system_product_id": purchase_product.system_product_id,
                         "create_time": purchase_product.create_time,
@@ -2109,7 +2135,7 @@ def printThePackageLabelByPurchaseProductId():
                 
                 try:
                     db.session.commit()
-                    operate_log_writer_func(operateType=OperateType.ozonOrder, describe=f"操作人:{current_user.username}, 操作:获取ozon订单{ozon_order.id}面单")
+                    operate_log_writer_func(operateType=OperateType.ozonOrder, describe=f"操作人:{user.username}, 操作:获取ozon订单{ozon_order.id}面单")
                     
                     return {
                         "msg": f"获取ozon订单{ozon_order.id}面单成功!",
@@ -2261,6 +2287,10 @@ def stockOutPurchaseProductWithPurchaseProductId():
 
         if purchase_product:
             ozon_order = purchase_product.ozon_order
+            if not ozon_order:
+                return jsonify({"msg":"该采购商品未绑定ozon订单"}),401
+            if not ozon_order.system_status == SystemStatus.stockPreparedPendingOutward:
+                return jsonify({"msg":f"该采购商品绑定的ozon订单状态为{ozon_order.system_status}，无法出库！"}),400
         else:
             return jsonify({"msg":"找不到对应ID的采购商品！"}),401
 
@@ -2289,6 +2319,7 @@ def stockOutPurchaseProductWithPurchaseProductId():
             if ozon_order.system_status == SystemStatus.stockPreparedPendingOutward:
                 ozon_order.system_status = SystemStatus.outwardShippedPendingDispatch
                 ozon_order.dispatch_time = datetime.now()
+                
                 res = GetPackageLabel(
                     api_id = ozon_order.shop.api_id,
                     api_key = ozon_order.shop.api_key,
@@ -2319,124 +2350,265 @@ def stockOutPurchaseProductWithPurchaseProductId():
 
         # 如果这一个ozon订单包含多个采购商品 并返回这个订单相关信息
         else:
-            result = ozon_order
+            if all(item.status == PurchaseProductStatus.out_stock  for item in ozon_order.purchase_products):
+                if ozon_order.system_status == SystemStatus.stockPreparedPendingOutward:
+                    ozon_order.system_status = SystemStatus.outwardShippedPendingDispatch
+                    ozon_order.dispatch_time = datetime.now()
+                    res = GetPackageLabel(
+                        api_id = ozon_order.shop.api_id,
+                        api_key = ozon_order.shop.api_key,
+                        posting_number = ozon_order.posting_number
+                    )
 
-            result = {
-                "id": result.id,
-                "order_id": result.order_id,
-                "order_number": result.order_number,
-                "posting_number": result.posting_number,
-                "posting_status": result.posting_status,
-                "logistics_status": result.logistics_status,
-                "delivery" : {
-                    "delivery_id": result.delivery_id,
-                    "delivery_name": result.delivery_name,
-                    "delivery_tpl_provider_type": result.delivery_tpl_provider_type,
-                    "delivery_tpl_provider_id": result.delivery_tpl_provider_id,
-                    "delivery_tpl_provider_name": result.delivery_tpl_provider_name,
-                },
-                "warehouse_id": result.warehouse_id,
-                "warehouse_name": result.warehouse_name,
-                "tracking_number": result.tracking_number,
-                "customer_id": result.customer_id,
-                "customer_name": result.customer_name,
-                "address_city": result.address_city,
-                "in_process_at": result.in_process_at,
-                "shipment_date": result.shipment_date,
-                "delivering_date": result.delivering_date,
-                "cancel_reason": result.cancel_reason,
-                "cancellation_type": result.cancellation_type,
-                "currency_code": result.currency_code,
-                "total_price": result.total_price,
-                "system_status": result.system_status,
-                "approval_time": result.approval_time,
-                "dispatch_time": result.dispatch_time,
-                "shop": {"id":result.shop.id, "name":result.shop.name},
-                "owner": {"id":result.shop.owner.id, "name":result.shop.owner.username} if result.shop.owner else None,
-                "create_time": result.create_time,
-                "modify_time": result.modify_time,
+                    if res["data"]:
+                        data = io.BytesIO(res["data"])
+                        data.seek(0)  # 重置指针位置
+                        data = data.getvalue()
+                    else:
+                        return {"msg":f"获取ozon订单{ozon_order.id}面单失败!"}, 400
+                    
+                    try:
+                        db.session.commit()
+                        operate_log_writer_func(operateType=OperateType.ozonOrder, describe=f"操作人:{current_user.username}, 操作:订单出库, {ozon_order.id}")
+                        operate_log_writer_func(operateType=OperateType.purchaseProduct, describe=f"操作人:{current_user.username}, 操作:采购商品出库, {purchase_product.id}")
+                        
+                        result = ozon_order
+
+                        return {
+                            "msg": "ozon订单、采购商品出库成功!",
+                            "data_print": base64.b64encode(data).decode('utf-8'),
+                            "data": {
+                                "id": result.id,
+                                "order_id": result.order_id,
+                                "order_number": result.order_number,
+                                "posting_number": result.posting_number,
+                                "posting_status": result.posting_status,
+                                "logistics_status": result.logistics_status,
+                                "delivery" : {
+                                    "delivery_id": result.delivery_id,
+                                    "delivery_name": result.delivery_name,
+                                    "delivery_tpl_provider_type": result.delivery_tpl_provider_type,
+                                    "delivery_tpl_provider_id": result.delivery_tpl_provider_id,
+                                    "delivery_tpl_provider_name": result.delivery_tpl_provider_name,
+                                },
+                                "warehouse_id": result.warehouse_id,
+                                "warehouse_name": result.warehouse_name,
+                                "tracking_number": result.tracking_number,
+                                "customer_id": result.customer_id,
+                                "customer_name": result.customer_name,
+                                "address_city": result.address_city,
+                                "in_process_at": result.in_process_at,
+                                "shipment_date": result.shipment_date,
+                                "delivering_date": result.delivering_date,
+                                "cancel_reason": result.cancel_reason,
+                                "cancellation_type": result.cancellation_type,
+                                "currency_code": result.currency_code,
+                                "total_price": result.total_price,
+                                "system_status": result.system_status,
+                                "approval_time": result.approval_time,
+                                "dispatch_time": result.dispatch_time,
+                                "shop": {"id":result.shop.id, "name":result.shop.name},
+                                "owner": {"id":result.shop.owner.id, "name":result.shop.owner.username} if result.shop.owner else None,
+                                "create_time": result.create_time,
+                                "modify_time": result.modify_time,
+                                
+                                # 对应的采购的商品
+                                "purchase_products":[
+                                        {
+                                            "id": purchase_product.id,
+                                            "price": purchase_product.price,
+                                            "stock_in_date": purchase_product.stock_in_date,
+                                            "sku": purchase_product.sku,
+                                            "type": purchase_product.type,
+                                            "status": purchase_product.status,
+                                            "purchase_order_id": purchase_product.purchase_order_id,
+                                            "system_product_id": purchase_product.system_product_id,
+                                            "create_time": purchase_product.create_time,
+                                            "modify_time": purchase_product.modify_time,
+                                        } for purchase_product in result.purchase_products
+                                    ],
+
+                                # 对应的ozon商品
+                                "products":[
+                                    {
+                                        "quantity": item.quantity,
+                                        "real_price":item.price,
+                                        "id": item.ozon_product.id,
+                                        "offer_id": item.ozon_product.offer_id,
+                                        "name": item.ozon_product.name,
+                                        "price": item.ozon_product.price,
+                                        "currency_code": item.ozon_product.currency_code,
+                                        "sku": item.ozon_product.sku,
+                                        "link": item.ozon_product.link,
+                                        "mandatory_mark": item.ozon_product.mandatory_mark,
+                                        "fbo_commission_percent": item.ozon_product.fbo_commission_percent,
+                                        "fbo_commission_value": item.ozon_product.fbo_commission_value,
+                                        "fbs_commission_percent": item.ozon_product.fbs_commission_percent,
+                                        "fbs_commission_value": item.ozon_product.fbs_commission_value,
+                                        "rfbs_commission_percent": item.ozon_product.rfbs_commission_percent,
+                                        "rfbs_commission_value": item.ozon_product.rfbs_commission_value,
+                                        "fbp_commission_percent": item.ozon_product.fbp_commission_percent,
+                                        "fbp_commission_value": item.ozon_product.fbp_commission_value,
+                                        "product_id": item.ozon_product.product_id,
+                                        "create_time": item.ozon_product.create_time,
+                                        "primary_image":item.ozon_product.primary_image,
+                                        "category_two_id":item.ozon_product.category_two_id,
+                                        "category_three_id":item.ozon_product.category_three_id,
+                                        "create_time": item.ozon_product.create_time,
+                                        "modify_time": item.ozon_product.modify_time,
+                                        "system_products":[
+                                            {
+                                                "id": system_products_msg.system_product.id,
+                                                "primary_image": system_products_msg.system_product.primary_image,
+                                                "system_sku": system_products_msg.system_product.system_sku,
+                                                "reference_weight": system_products_msg.system_product.reference_weight,
+                                                "reference_cost": system_products_msg.system_product.reference_cost,
+                                                "purchase_link": system_products_msg.system_product.purchase_link,
+                                                "supplier_name": system_products_msg.system_product.supplier_name,
+                                                "purchase_platform": system_products_msg.system_product.purchase_platform,
+                                                "creator": {"id":system_products_msg.system_product.creator_id, "name":system_products_msg.system_product.creator.username},
+                                                "create_time": system_products_msg.system_product.create_time,
+                                                "modify_time": system_products_msg.system_product.modify_time,
+                                                "quantity":system_products_msg.quantity,
+                                                "wait_for_purchase_quantity": len([item for item in system_products_msg.system_product.purchase_products if item.status == PurchaseProductStatus.wait_purchase]),
+                                                "in_basket_quantity": len([item for item in system_products_msg.system_product.purchase_products if item.status == PurchaseProductStatus.in_basket]),
+                                                "in_transit_quantity": len([item for item in system_products_msg.system_product.purchase_products if item.status == PurchaseProductStatus.in_transit]),
+                                                "stock_quantity":len([item for item in system_products_msg.system_product.purchase_products if item.status == PurchaseProductStatus.in_stock]),
+                                                "out_stock_quantity":len([item for item in system_products_msg.system_product.purchase_products if item.status == PurchaseProductStatus.out_stock]),
+                                                "loss_quantity":len([item for item in system_products_msg.system_product.purchase_products if item.status == PurchaseProductStatus.loss]),
+
+                                            } for system_products_msg in item.ozon_product.system_products_msg
+                                        ]
+                                    } for item in result.ozon_products_msg
+                                ]
+                            },
+                            "type": "组合订单"
+                        }, 200  
+                    except Exception as e:
+                        return {"msg": f"订单出库失败！{e}"}, 400
+                else:
+                    return {"msg":f"当前ozon订单状态{ozon_order.system_status} 无法出库！"},400
+            else:
                 
-                # 对应的采购的商品
-                "purchase_products":[
-                        {
-                            "id": purchase_product.id,
-                            "price": purchase_product.price,
-                            "stock_in_date": purchase_product.stock_in_date,
-                            "sku": purchase_product.sku,
-                            "type": purchase_product.type,
-                            "status": purchase_product.status,
-                            "purchase_order_id": purchase_product.purchase_order_id,
-                            "system_product_id": purchase_product.system_product_id,
-                            "create_time": purchase_product.create_time,
-                            "modify_time": purchase_product.modify_time,
-                        } for purchase_product in result.purchase_products
-                    ],
+                result = ozon_order
 
-                # 对应的ozon商品
-                "products":[
-                    {
-                        "quantity": item.quantity,
-                        "real_price":item.price,
-                        "id": item.ozon_product.id,
-                        "offer_id": item.ozon_product.offer_id,
-                        "name": item.ozon_product.name,
-                        "price": item.ozon_product.price,
-                        "currency_code": item.ozon_product.currency_code,
-                        "sku": item.ozon_product.sku,
-                        "link": item.ozon_product.link,
-                        "mandatory_mark": item.ozon_product.mandatory_mark,
-                        "fbo_commission_percent": item.ozon_product.fbo_commission_percent,
-                        "fbo_commission_value": item.ozon_product.fbo_commission_value,
-                        "fbs_commission_percent": item.ozon_product.fbs_commission_percent,
-                        "fbs_commission_value": item.ozon_product.fbs_commission_value,
-                        "rfbs_commission_percent": item.ozon_product.rfbs_commission_percent,
-                        "rfbs_commission_value": item.ozon_product.rfbs_commission_value,
-                        "fbp_commission_percent": item.ozon_product.fbp_commission_percent,
-                        "fbp_commission_value": item.ozon_product.fbp_commission_value,
-                        "product_id": item.ozon_product.product_id,
-                        "create_time": item.ozon_product.create_time,
-                        "primary_image":item.ozon_product.primary_image,
-                        "category_two_id":item.ozon_product.category_two_id,
-                        "category_three_id":item.ozon_product.category_three_id,
-                        "create_time": item.ozon_product.create_time,
-                        "modify_time": item.ozon_product.modify_time,
-                        "system_products":[
+                result = {
+                    "id": result.id,
+                    "order_id": result.order_id,
+                    "order_number": result.order_number,
+                    "posting_number": result.posting_number,
+                    "posting_status": result.posting_status,
+                    "logistics_status": result.logistics_status,
+                    "delivery" : {
+                        "delivery_id": result.delivery_id,
+                        "delivery_name": result.delivery_name,
+                        "delivery_tpl_provider_type": result.delivery_tpl_provider_type,
+                        "delivery_tpl_provider_id": result.delivery_tpl_provider_id,
+                        "delivery_tpl_provider_name": result.delivery_tpl_provider_name,
+                    },
+                    "warehouse_id": result.warehouse_id,
+                    "warehouse_name": result.warehouse_name,
+                    "tracking_number": result.tracking_number,
+                    "customer_id": result.customer_id,
+                    "customer_name": result.customer_name,
+                    "address_city": result.address_city,
+                    "in_process_at": result.in_process_at,
+                    "shipment_date": result.shipment_date,
+                    "delivering_date": result.delivering_date,
+                    "cancel_reason": result.cancel_reason,
+                    "cancellation_type": result.cancellation_type,
+                    "currency_code": result.currency_code,
+                    "total_price": result.total_price,
+                    "system_status": result.system_status,
+                    "approval_time": result.approval_time,
+                    "dispatch_time": result.dispatch_time,
+                    "shop": {"id":result.shop.id, "name":result.shop.name},
+                    "owner": {"id":result.shop.owner.id, "name":result.shop.owner.username} if result.shop.owner else None,
+                    "create_time": result.create_time,
+                    "modify_time": result.modify_time,
+                    
+                    # 对应的采购的商品
+                    "purchase_products":[
                             {
-                                "id": system_products_msg.system_product.id,
-                                "primary_image": system_products_msg.system_product.primary_image,
-                                "system_sku": system_products_msg.system_product.system_sku,
-                                "reference_weight": system_products_msg.system_product.reference_weight,
-                                "reference_cost": system_products_msg.system_product.reference_cost,
-                                "purchase_link": system_products_msg.system_product.purchase_link,
-                                "supplier_name": system_products_msg.system_product.supplier_name,
-                                "purchase_platform": system_products_msg.system_product.purchase_platform,
-                                "creator": {"id":system_products_msg.system_product.creator_id, "name":system_products_msg.system_product.creator.username},
-                                "create_time": system_products_msg.system_product.create_time,
-                                "modify_time": system_products_msg.system_product.modify_time,
-                                "quantity":system_products_msg.quantity,
-                                "wait_for_purchase_quantity": len([item for item in system_products_msg.system_product.purchase_products if item.status == PurchaseProductStatus.wait_purchase]),
-                                "in_basket_quantity": len([item for item in system_products_msg.system_product.purchase_products if item.status == PurchaseProductStatus.in_basket]),
-                                "in_transit_quantity": len([item for item in system_products_msg.system_product.purchase_products if item.status == PurchaseProductStatus.in_transit]),
-                                "stock_quantity":len([item for item in system_products_msg.system_product.purchase_products if item.status == PurchaseProductStatus.in_stock]),
-                                "out_stock_quantity":len([item for item in system_products_msg.system_product.purchase_products if item.status == PurchaseProductStatus.out_stock]),
-                                "loss_quantity":len([item for item in system_products_msg.system_product.purchase_products if item.status == PurchaseProductStatus.loss]),
+                                "id": purchase_product.id,
+                                "price": purchase_product.price,
+                                "stock_in_date": purchase_product.stock_in_date,
+                                "sku": purchase_product.sku,
+                                "type": purchase_product.type,
+                                "status": purchase_product.status,
+                                "purchase_order_id": purchase_product.purchase_order_id,
+                                "system_product_id": purchase_product.system_product_id,
+                                "create_time": purchase_product.create_time,
+                                "modify_time": purchase_product.modify_time,
+                            } for purchase_product in result.purchase_products
+                        ],
 
-                            } for system_products_msg in item.ozon_product.system_products_msg
-                        ]
-                    } for item in result.ozon_products_msg
-                ]
-            } 
+                    # 对应的ozon商品
+                    "products":[
+                        {
+                            "quantity": item.quantity,
+                            "real_price":item.price,
+                            "id": item.ozon_product.id,
+                            "offer_id": item.ozon_product.offer_id,
+                            "name": item.ozon_product.name,
+                            "price": item.ozon_product.price,
+                            "currency_code": item.ozon_product.currency_code,
+                            "sku": item.ozon_product.sku,
+                            "link": item.ozon_product.link,
+                            "mandatory_mark": item.ozon_product.mandatory_mark,
+                            "fbo_commission_percent": item.ozon_product.fbo_commission_percent,
+                            "fbo_commission_value": item.ozon_product.fbo_commission_value,
+                            "fbs_commission_percent": item.ozon_product.fbs_commission_percent,
+                            "fbs_commission_value": item.ozon_product.fbs_commission_value,
+                            "rfbs_commission_percent": item.ozon_product.rfbs_commission_percent,
+                            "rfbs_commission_value": item.ozon_product.rfbs_commission_value,
+                            "fbp_commission_percent": item.ozon_product.fbp_commission_percent,
+                            "fbp_commission_value": item.ozon_product.fbp_commission_value,
+                            "product_id": item.ozon_product.product_id,
+                            "create_time": item.ozon_product.create_time,
+                            "primary_image":item.ozon_product.primary_image,
+                            "category_two_id":item.ozon_product.category_two_id,
+                            "category_three_id":item.ozon_product.category_three_id,
+                            "create_time": item.ozon_product.create_time,
+                            "modify_time": item.ozon_product.modify_time,
+                            "system_products":[
+                                {
+                                    "id": system_products_msg.system_product.id,
+                                    "primary_image": system_products_msg.system_product.primary_image,
+                                    "system_sku": system_products_msg.system_product.system_sku,
+                                    "reference_weight": system_products_msg.system_product.reference_weight,
+                                    "reference_cost": system_products_msg.system_product.reference_cost,
+                                    "purchase_link": system_products_msg.system_product.purchase_link,
+                                    "supplier_name": system_products_msg.system_product.supplier_name,
+                                    "purchase_platform": system_products_msg.system_product.purchase_platform,
+                                    "creator": {"id":system_products_msg.system_product.creator_id, "name":system_products_msg.system_product.creator.username},
+                                    "create_time": system_products_msg.system_product.create_time,
+                                    "modify_time": system_products_msg.system_product.modify_time,
+                                    "quantity":system_products_msg.quantity,
+                                    "wait_for_purchase_quantity": len([item for item in system_products_msg.system_product.purchase_products if item.status == PurchaseProductStatus.wait_purchase]),
+                                    "in_basket_quantity": len([item for item in system_products_msg.system_product.purchase_products if item.status == PurchaseProductStatus.in_basket]),
+                                    "in_transit_quantity": len([item for item in system_products_msg.system_product.purchase_products if item.status == PurchaseProductStatus.in_transit]),
+                                    "stock_quantity":len([item for item in system_products_msg.system_product.purchase_products if item.status == PurchaseProductStatus.in_stock]),
+                                    "out_stock_quantity":len([item for item in system_products_msg.system_product.purchase_products if item.status == PurchaseProductStatus.out_stock]),
+                                    "loss_quantity":len([item for item in system_products_msg.system_product.purchase_products if item.status == PurchaseProductStatus.loss]),
 
-            try:
-                db.session.commit()
-                operate_log_writer_func(operateType=OperateType.purchaseProduct, describe=f"操作人:{current_user.username}, 操作:采购商品出库, {purchase_product.id}")
-                return jsonify({
-                    "msg":"采购商品出库成功！",
-                    "data":result,
-                    "type":"组合订单"
-                }), 200 
-            except Exception as e:
-                return {"msg":"采购商品出库失败！"}, 400
+                                } for system_products_msg in item.ozon_product.system_products_msg
+                            ]
+                        } for item in result.ozon_products_msg
+                    ]
+                } 
+
+                try:
+                    db.session.commit()
+                    operate_log_writer_func(operateType=OperateType.purchaseProduct, describe=f"操作人:{current_user.username}, 操作:采购商品出库, {purchase_product.id}")
+                    return jsonify({
+                        "msg":"采购商品出库成功！",
+                        "data":result,
+                        "data_print": None,
+                        "type":"组合订单"
+                    }), 200 
+                except Exception as e:
+                    return {"msg":"采购商品出库失败！"}, 400
             
     else:
        return jsonify({

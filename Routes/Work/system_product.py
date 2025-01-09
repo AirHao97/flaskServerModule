@@ -63,8 +63,49 @@ def getData():
                     if not any(role.id == "1" for role in current_user.roles):
                         return {"msg":"当前账户无操作权限！"},400
 
-        results = query.order_by(SystemProduct.create_time).offset(start).limit(limit).all()
-        count = query.order_by(SystemProduct.create_time).count()
+        if current_user.is_admin:
+            results = query.offset(start).limit(limit).all()
+            count = query.count()
+        elif current_user.is_department_admin and current_user.department:
+            user_ids = []
+            users = User.query.filter_by(department_id = current_user.department_id).all()
+            # 本部门
+            for i in users:
+                user_ids.append(i.id)
+            # 自己关联的
+            for i in current_user.partner_system_products_of:
+                user_ids.append(i.id)
+
+            query = query.filter(SystemProduct.creator_id.in_(user_ids))
+            results = query.offset(start).limit(limit).all()
+            count = query.count()
+
+        elif current_user.is_team_admin and current_user.team:
+            user_ids = []
+            users = User.query.filter_by(team_id = current_user.team_id).all()
+            # 本小组的
+            for i in users:
+                user_ids.append(i.id)
+            # 自己关联的
+            for i in current_user.partner_system_products_of:
+                user_ids.append(i.id)
+
+            query = query.filter(SystemProduct.creator_id.in_(user_ids))
+            results = query.offset(start).limit(limit).all()
+            count = query.count()
+        else:
+            if not any(role.id == "1" for role in current_user.roles):
+                return {"msg":"当前账户无操作权限！"},400
+            
+            # 自己店铺下的id
+            user_ids = [current_user.id]
+            # 可处理订单的关系伙伴下的店铺id
+            for i in current_user.partner_system_products_of:
+                user_ids.append(i.id)
+
+            query = query.filter(SystemProduct.creator_id.in_(user_ids))
+            results = query.offset(start).limit(limit).all()
+            count = query.count()
             
         results = {
             "data" :[
@@ -545,35 +586,6 @@ def modifyData():
             return {"msg":"系统内商品信息修改失败！"}, 400
     else:
         return {"msg":"当前账户无操作权限！"},400 
-
-
-# 临时使用 修改link数据
-@system_product_list.route('/controlData', methods=['POST'])
-@jwt_required()
-@active_required
-def controlData():
-    system_products = SystemProduct.query.all()
-
-    for system_product in system_products:
-        purchase_links = json.loads(system_product.purchase_link)
-        if len(purchase_links)>1:
-            purchase_links = [purchase_links[0]]
-        for purchase_link in purchase_links:
-            purchase_link["purchase_platform"] = system_product.purchase_platform
-            purchase_link["supplier_name"] = system_product.supplier_name
-            purchase_link["productId_1688"] = system_product.productId_1688
-            purchase_link["specId_1688"] = system_product.specId_1688
-            purchase_link["skuId_1688"] = system_product.skuId_1688
-            purchase_link["reference_weight"] = system_product.reference_weight
-            purchase_link["reference_cost"] = system_product.reference_cost
-            purchase_link["primary_image"] = system_product.primary_image
-
-        system_product.purchase_link = json.dumps(purchase_links,ensure_ascii=False)
-    
-    db.session.commit()
-            
-    return {},200
-
 
 # 系统管理员、部门管理员、小组管理员 和 运营可操作
 # 系统管理员可删除全部数据

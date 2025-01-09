@@ -74,6 +74,7 @@ def updataProductDataThread(app):
                 # 更新产品佣金信息
                 shop = ozon_product.shop
                 result = getProductInfo(api_id=shop.api_id,api_key=shop.api_key,sku=ozon_product.sku)
+
                 if result["data"]:
                     product_msg = result["data"]["result"]
                     updataMsg["updataProgress"]["nowUpdata"] += 1
@@ -103,13 +104,11 @@ def updataProductDataThread(app):
                     try:
                         db.session.commit()
                     except Exception as e:
-                        updataMsg["msg"] = f"ozon商品更新失败!错误信息：{e}"
-                        operate_log_writer_func(operateType=OperateType.ozonProduct,describe=f"ozon商品更新失败，错误信息”：{e}",isSystem=True)
-                        return 
+                        updataMsg["msg"] = f"ozon商品{ozon_product.id}更新失败!错误信息：{e}"
+                        operate_log_writer_func(operateType=OperateType.ozonProduct,describe=f"ozon商品{ozon_product.id}更新失败，错误信息：{e}",isSystem=True)
                 else:
-                    updataRunning = False
+                    operate_log_writer_func(operateType=OperateType.ozonProduct,describe=f"ozon商品{ozon_product.id}更新失败，错误信息：{result['msg']}",isSystem=True)
                     updataMsg["msg"] = result["msg"]
-                    return
 
             updataMsg["msg"] = "ozon商品信息更新完成!"
             updataMsg["lastUpdataData"]["lastUpdataTime"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")                        
@@ -118,7 +117,7 @@ def updataProductDataThread(app):
 
         except Exception as e:
             updataRunning = False  
-            operate_log_writer_func(operateType=OperateType.ozonOrder,describe=f"ozonc产品更新失败,错误信息”：{e}",isSystem=True)
+            operate_log_writer_func(operateType=OperateType.ozonOrder,describe=f"ozon产品更新失败,错误信息”：{e}",isSystem=True)
             stack_trace = traceback.format_exc()
             updataMsg["msg"] =  f"ozon商品更新失败,错误信息”：{stack_trace}"
             return

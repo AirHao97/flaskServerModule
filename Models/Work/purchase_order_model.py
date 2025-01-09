@@ -28,6 +28,10 @@ class PurchaseOrder(db.Model):
 
 
     packer_msg = db.Column(db.Text, doc='打包入库异常留言')
+    packer_msg_date = db.Column(db.DateTime, doc='打包入库异常留言时间')
+
+    mark = db.Column(db.Text, doc='采购自己的备注')
+
 
     # 1688 pdd 线下
     purchase_platform = db.Column(db.Text, doc='采购平台')

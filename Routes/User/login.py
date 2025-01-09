@@ -138,18 +138,20 @@ def registration():
 @login_list.route('/modifyPassword', methods=['POST'])
 def modifyPassword():
 
-    current_user = get_jwt()
     data = request.get_json()
-    
-    user =  User.query.filter_by(username=current_user["username"]).first()
+
+    if "username" in data:
+        user =  User.query.filter_by(username=data["username"]).first()
+    else:
+        return jsonify({"msg": "username 字段不能为空！"}), 400
 
     if user:
-        if "password" in data:
-            password = data["password"]
-            if User.check_password(password):
+        if "old_password" in data:
+            old_password = data["old_password"]
+            if User.check_password(user,old_password):
                 if "new_password" in data:
                     if data["new_password"]:
-                        if len(data["new_password"] >= 6):
+                        if len(data["new_password"])  >= 6 :
                             user.password = user.set_password(data['new_password'])
                         else:
                             return jsonify({"msg": "新密码数量不能少于6位！"}), 400
@@ -160,12 +162,11 @@ def modifyPassword():
             else:
                 return jsonify({"msg": "旧密码错误！"}), 400
         else:
-            return jsonify({"msg": "password 字段不能为空！"}), 400
+            return jsonify({"msg": "old_password 字段不能为空！"}), 400
 
         try:
-            db.session.add_all([user])
             db.session.commit()
-            operate_log_writer_func(operateType=OperateType.user,describe=f"操作人:{user.username}, 操作: 修改密码")
+            operate_log_writer_func(operateType=OperateType.user,describe=f"操作人:{user.username}, 操作: 修改密码",isSystem=True)
             return jsonify({"msg": "修改密码成功！"}), 200
         except Exception:
             return jsonify({"msg": "修改密码失败！"}), 400
